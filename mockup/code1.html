@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Global Aggregation - Event Monitor (Dark Mode)</title>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#f59e0b", // Amber 500 - slightly brighter for dark mode visibility
+                        "primary-hover": "#fbbf24", // Amber 400
+                        "background-main": "#1c1917", // Stone 900 (Main BG)
+                        "surface": "#292524", // Stone 800 (Card BG)
+                        "surface-highlight": "#44403c", // Stone 700
+                        "border-main": "#57534e", // Stone 600
+                        "text-main": "#f5f5f4", // Stone 100
+                        "text-sub": "#a8a29e", // Stone 400
+                        "input-bg": "#0c0a09", // Stone 950
+                        // Functional Colors (Dark Mode Variants)
+                        "success-bg": "rgba(20, 83, 45, 0.4)", // Green 900/40
+                        "success-text": "#86efac", // Green 300
+                        "success-border": "#15803d", // Green 700
+                        "error-bg": "rgba(127, 29, 29, 0.4)", // Red 900/40
+                        "error-text": "#fca5a5", // Red 300
+                        "error-border": "#b91c1c", // Red 700
+                        "warning-bg": "rgba(124, 45, 18, 0.4)", // Orange 900/40
+                        "warning-text": "#fdba74", // Orange 300
+                        "warning-border": "#c2410c", // Orange 700
+                        // Mapping original color names to dark theme where specific
+                        "stone-800": "#292524", // Kept for reference, but mostly replaced semantically
+                    },
+                    fontFamily: {
+                        "display": ["Inter", "sans-serif"],
+                        "mono": ["ui-monospace", "SFMono-Regular", "Menlo", "Monaco", "Consolas", "Liberation Mono", "Courier New", "monospace"]
+                    },
+                    borderRadius: {"DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px"},
+                    boxShadow: {
+                        'hard': '4px 4px 0px 0px #000000', // Black shadow for dark mode
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        ::-webkit-scrollbar {
+            width: 10px;
+            height: 10px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1c1917;border-left: 1px solid #44403c;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #57534e;border: 2px solid #1c1917;
+            border-radius: 0;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #78716c;}
+        .tab-active {
+            border-bottom: 3px solid #f59e0b;
+            color: #f5f5f4;
+            font-weight: 700;
+        }
+        .tab-inactive {
+            border-bottom: 3px solid transparent;
+            color: #a8a29e;
+        }
+        .tab-inactive:hover {
+            color: #f5f5f4;
+            border-bottom: 3px solid #57534e;
+        }
+        *:focus-visible {
+            outline: 3px solid #f59e0b;
+            outline-offset: 2px;
+        }
+        .animate-spin-slow {
+            animation: spin 3s linear infinite;
+        }
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="bg-background-main font-display text-text-main overflow-hidden h-screen flex flex-col">
+<header class="flex-none flex items-center justify-between whitespace-nowrap border-b-2 border-border-main px-10 py-3 bg-surface z-20">
+<div class="flex items-center gap-4 text-text-main">
+<div class="size-8 text-primary flex items-center justify-center">
+<span class="material-symbols-outlined !text-[32px]">dataset</span>
+</div>
+<h2 class="text-text-main text-xl font-black leading-tight tracking-tight uppercase">EventMonitor</h2>
+</div>
+<div class="flex flex-1 justify-end gap-6 items-center">
+<div class="flex items-center gap-2 text-text-main text-sm font-bold">
+<span class="w-3 h-3 rounded-full bg-green-500 border border-black animate-pulse shadow-[0_0_8px_rgba(34,197,94,0.6)]"></span>
+                Global System Operational
+            </div>
+<div class="h-8 w-0.5 bg-border-main opacity-40"></div>
+<button class="text-text-sub hover:text-primary transition-colors">
+<span class="material-symbols-outlined !text-[28px]">notifications</span>
+</button>
+<button class="text-text-sub hover:text-primary transition-colors">
+<span class="material-symbols-outlined !text-[28px]">settings</span>
+</button>
+<div class="bg-center bg-no-repeat aspect-square bg-cover rounded-full size-10 ring-2 ring-border-main" data-alt="User profile avatar showing a generic silhouette" style='background-image: url("https://lh3.googleusercontent.com/aida-public/AB6AXuDFW0fRRwGezd8d24vDx0alculZ3uZcRZhqb2hr2U7cWrGBbiGqFreKJ26nYSO7PhcMpyQzBR7fMx6gaKLif9tZickbhWGWKXphxZoFKoVLHTzkqNO6fKKsHH9FLgyhu8M8tDmiffqOJnOKGw482LXU_EjRU3YWenSCpcqOhZj-cd6I7VBhHU1NrqD9h8dAW_OS7ky2c8uXrRSjOnneNisBOsSPc6SmI3rdD-32cqfUendHnoUVIiL8BuXMo6pgrgtAB-3z2eontWI");'></div>
+</div>
+</header>
+<div class="flex flex-1 overflow-hidden relative">
+<main class="flex-1 overflow-y-auto p-8 relative bg-background-main">
+<div class="max-w-[1440px] mx-auto flex flex-col gap-6">
+<nav class="flex items-center text-sm font-bold text-text-sub">
+<a class="hover:text-primary underline decoration-2 underline-offset-2 transition-colors" href="#">Dashboard</a>
+<span class="mx-2 text-border-main font-black">/</span>
+<span class="text-text-main bg-surface-highlight px-2 py-0.5 rounded border border-border-main">Global Aggregation</span>
+</nav>
+<div class="flex flex-col lg:flex-row justify-between items-start lg:items-end gap-6 pb-4 border-b-2 border-border-main">
+<div class="flex flex-col gap-2">
+<div class="flex items-center gap-3">
+<h1 class="text-4xl font-black text-text-main tracking-tighter">Global Aggregation</h1>
+<span class="px-2 py-1 rounded-md text-xs font-bold bg-black text-primary border border-primary shadow-[2px_2px_0px_0px_#f59e0b]">LIVE VIEW</span>
+</div>
+<p class="text-text-sub text-sm flex items-center gap-1 font-semibold">
+<span class="material-symbols-outlined !text-[18px]">dns</span>
+                            Monitoring 142 Event Types across 6 Regions
+                        </p>
+</div>
+<div class="flex flex-wrap items-center gap-3">
+<div class="relative group">
+<div class="absolute left-3 top-1/2 -translate-y-1/2 text-text-sub">
+<span class="material-symbols-outlined !text-[20px] font-bold">calendar_today</span>
+</div>
+<input class="bg-input-bg border-2 border-border-main text-text-main font-bold text-sm rounded-lg pl-10 pr-4 py-2.5 focus:ring-0 focus:border-primary outline-none w-44 cursor-pointer shadow-[3px_3px_0px_0px_#000000] active:shadow-none active:translate-x-[3px] active:translate-y-[3px] transition-all placeholder-text-sub" readonly="" type="text" value="Last 24 Hours"/>
+</div>
+<button class="flex items-center justify-center gap-2 bg-primary hover:bg-primary-hover text-black text-sm font-black rounded-lg px-6 py-2.5 transition-all shadow-[3px_3px_0px_0px_#000000] active:shadow-none active:translate-x-[3px] active:translate-y-[3px] border-2 border-black">
+<span class="material-symbols-outlined !text-[20px] animate-spin-slow">refresh</span>
+<span>REFRESH</span>
+</button>
+</div>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+<div class="bg-surface border-2 border-border-main rounded-xl p-5 relative overflow-hidden group hover:bg-surface-highlight transition-colors shadow-hard">
+<div class="flex justify-between items-start mb-2">
+<p class="text-text-sub text-sm font-bold uppercase tracking-wider">Total Ingestion</p>
+<span class="text-primary bg-yellow-900/20 border border-yellow-800 rounded p-1">
+<span class="material-symbols-outlined !text-[20px]">bar_chart</span>
+</span>
+</div>
+<p class="text-4xl font-black text-text-main mb-1">2.4M</p>
+<p class="text-xs text-success-text bg-success-bg inline-block px-1 rounded border border-success-border flex items-center gap-1 font-bold mt-2">
+<span class="material-symbols-outlined !text-[14px]">trending_up</span>
+                            +5.2% vs yesterday
+                        </p>
+</div>
+<div class="bg-surface border-2 border-border-main rounded-xl p-5 relative overflow-hidden group hover:bg-surface-highlight transition-colors shadow-hard">
+<div class="flex justify-between items-start mb-2">
+<p class="text-text-sub text-sm font-bold uppercase tracking-wider">Global Success</p>
+<span class="text-green-400 bg-green-900/20 border border-green-800 rounded p-1">
+<span class="material-symbols-outlined !text-[20px]">check_circle</span>
+</span>
+</div>
+<p class="text-4xl font-black text-text-main mb-1">99.92%</p>
+<div class="w-full bg-surface-highlight border border-border-main h-3 mt-3 rounded-full overflow-hidden">
+<div class="bg-green-600 h-full w-[99.92%]"></div>
+</div>
+</div>
+<div class="bg-surface border-2 border-border-main rounded-xl p-5 relative overflow-hidden group hover:bg-surface-highlight transition-colors shadow-hard">
+<div class="flex justify-between items-start mb-2">
+<p class="text-text-sub text-sm font-bold uppercase tracking-wider">Active Alerts</p>
+<span class="text-red-400 bg-red-900/20 border border-red-800 rounded p-1">
+<span class="material-symbols-outlined !text-[20px]">notifications_active</span>
+</span>
+</div>
+<p class="text-4xl font-black text-text-main mb-1">3</p>
+<p class="text-xs text-text-sub mt-2 font-bold">1 Critical, 2 Warnings</p>
+</div>
+<div class="bg-surface border-2 border-border-main rounded-xl p-5 relative overflow-hidden shadow-hard hover:bg-surface-highlight transition-colors">
+<div class="flex justify-between items-start mb-2">
+<p class="text-text-sub text-sm font-bold uppercase tracking-wider">Avg Latency</p>
+<span class="text-orange-400 bg-orange-900/20 border border-orange-800 rounded p-1">
+<span class="material-symbols-outlined !text-[20px]">speed</span>
+</span>
+</div>
+<p class="text-4xl font-black text-text-main mb-1">145ms</p>
+<p class="text-xs text-text-sub mt-2 font-bold">P99: 820ms</p>
+</div>
+</div>
+<div class="bg-surface border-2 border-border-main rounded-xl p-5 flex flex-col h-72 shadow-hard">
+<div class="flex justify-between items-center mb-4">
+<h3 class="text-text-main font-bold text-base uppercase tracking-wider">System-wide Hourly Throughput</h3>
+<div class="flex gap-4">
+<span class="text-xs font-bold text-text-sub flex items-center gap-2"><span class="w-3 h-3 border border-border-main bg-amber-900/50"></span> Volume</span>
+<span class="text-xs font-bold text-text-sub flex items-center gap-2"><span class="w-3 h-3 border border-border-main bg-primary"></span> Peak</span>
+</div>
+</div>
+<div class="flex-1 relative w-full flex items-end gap-1 overflow-hidden pb-2 border-b-2 border-border-main">
+<div class="w-full h-full flex items-end justify-between px-2 gap-1.5">
+<div class="w-full bg-amber-900/50 border border-border-main hover:bg-primary rounded-t-sm h-[30%] transition-all relative group" title="00:00"></div>
+<div class="w-full bg-amber-900/50 border border-border-main hover:bg-primary rounded-t-sm h-[25%] transition-all relative group" title="01:00"></div>
+<div class="w-full bg-amber-900/50 border border-border-main hover:bg-primary rounded-t-sm h-[20%] transition-all relative group" title="02:00"></div>
+<div class="w-full bg-amber-900/50 border border-border-main hover:bg-primary rounded-t-sm h-[35%] transition-all relative group" title="03:00"></div>
+<div class="w-full bg-amber-900/50 border border-border-main hover:bg-primary rounded-t-sm h-[50%] transition-all relative group" title="04:00"></div>
+<div class="w-full bg-amber-900/50 border border-border-main hover:bg-primary rounded-t-sm h-[65%] transition-all relative group" title="05:00"></div>
+<div class="w-full bg-amber-900/50 border border-border-main hover:bg-primary rounded-t-sm h-[75%] transition-all relative group" title="06:00"></div>
+<div class="w-full bg-amber-900/50 border border-border-main hover:bg-primary rounded-t-sm h-[85%] transition-all relative group" title="07:00"></div>
+<div class="w-full bg-amber-900/50 border border-border-main hover:bg-primary rounded-t-sm h-[80%] transition-all relative group" title="08:00"></div>
+<div class="w-full bg-amber-900/50 border border-border-main hover:bg-primary rounded-t-sm h-[90%] transition-all relative group" title="09:00"></div>
+<div class="w-full bg-primary border-2 border-black rounded-t-sm h-[95%]" title="10:00 (Peak)"></div>
+<div class="w-full bg-amber-900/50 border border-border-main hover:bg-primary rounded-t-sm h-[88%] transition-all relative group" title="11:00"></div>
+<div class="w-full bg-surface-highlight border border-border-main rounded-t-sm h-[10%]" title="12:00"></div>
+<div class="w-full bg-surface-highlight border border-border-main rounded-t-sm h-[10%]"></div>
+<div class="w-full bg-surface-highlight border border-border-main rounded-t-sm h-[10%]"></div>
+<div class="w-full bg-surface-highlight border border-border-main rounded-t-sm h-[10%]"></div>
+<div class="w-full bg-surface-highlight border border-border-main rounded-t-sm h-[10%]"></div>
+<div class="w-full bg-surface-highlight border border-border-main rounded-t-sm h-[10%]"></div>
+<div class="w-full bg-surface-highlight border border-border-main rounded-t-sm h-[10%]"></div>
+<div class="w-full bg-surface-highlight border border-border-main rounded-t-sm h-[10%]"></div>
+<div class="w-full bg-surface-highlight border border-border-main rounded-t-sm h-[10%]"></div>
+<div class="w-full bg-surface-highlight border border-border-main rounded-t-sm h-[10%]"></div>
+</div>
+</div>
+</div>
+<div class="flex flex-col gap-4">
+<div class="flex flex-col sm:flex-row gap-4 justify-between items-center bg-surface-highlight border-2 border-border-main p-4 rounded-lg">
+<div class="relative w-full sm:w-96">
+<span class="absolute left-3 top-1/2 -translate-y-1/2 text-text-sub">
+<span class="material-symbols-outlined !text-[20px] font-bold">search</span>
+</span>
+<input class="w-full bg-input-bg border-2 border-border-main text-text-main font-bold text-sm rounded-md pl-10 pr-4 py-2 focus:ring-0 focus:border-primary outline-none placeholder:text-stone-600" placeholder="Search Event Types..." type="text"/>
+</div>
+<div class="flex gap-3 w-full sm:w-auto">
+<select class="bg-input-bg border-2 border-border-main text-text-main font-bold text-xs rounded-md px-3 py-2 focus:ring-0 focus:border-primary outline-none">
+<option>All Categories</option>
+<option>Commerce</option>
+<option>Authentication</option>
+</select>
+<button class="bg-input-bg border-2 border-border-main hover:bg-surface-highlight hover:border-text-sub text-text-main p-2 rounded-md transition-colors" title="Export CSV">
+<span class="material-symbols-outlined !text-[20px]">download</span>
+</button>
+</div>
+</div>
+<div class="overflow-x-auto rounded-lg border-2 border-border-main bg-surface mb-10 shadow-hard">
+<table class="w-full text-left border-collapse">
+<thead>
+<tr class="border-b-2 border-border-main bg-black text-text-main">
+<th class="p-4 text-xs font-bold uppercase tracking-wider w-1/3 text-gray-400">Event Type</th>
+<th class="p-4 text-xs font-bold uppercase tracking-wider text-gray-400">Volume (24h)</th>
+<th class="p-4 text-xs font-bold uppercase tracking-wider text-gray-400">Success Rate</th>
+<th class="p-4 text-xs font-bold uppercase tracking-wider text-gray-400">Latency (P95)</th>
+<th class="p-4 text-xs font-bold uppercase tracking-wider text-gray-400">Status</th>
+<th class="p-4 text-xs font-bold uppercase tracking-wider text-right text-gray-400">Actions</th>
+</tr>
+</thead>
+<tbody class="divide-y divide-border-main text-sm">
+<tr class="hover:bg-surface-highlight cursor-pointer group transition-colors">
+<td class="p-4">
+<div class="flex flex-col">
+<span class="text-text-main font-bold text-base">OrderProcessed</span>
+<span class="text-xs text-text-sub font-mono">Commerce / Core</span>
+</div>
+</td>
+<td class="p-4 text-text-main font-mono font-bold">1,240,592</td>
+<td class="p-4">
+<div class="flex items-center gap-2">
+<span class="text-text-main font-bold">99.98%</span>
+<span class="w-16 h-1.5 bg-surface-highlight rounded-full overflow-hidden border border-border-main">
+<div class="h-full bg-green-500 w-[99.98%]"></div>
+</span>
+</div>
+</td>
+<td class="p-4 text-text-sub font-mono font-bold">245ms</td>
+<td class="p-4">
+<span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-black bg-success-bg text-success-text border border-success-border uppercase tracking-wide">Healthy</span>
+</td>
+<td class="p-4 text-right">
+<button class="text-text-sub hover:text-primary transition-colors border border-transparent hover:border-border-main rounded p-1">
+<span class="material-symbols-outlined !text-[20px] font-bold">chevron_right</span>
+</button>
+</td>
+</tr>
+<tr class="hover:bg-surface-highlight cursor-pointer group transition-colors">
+<td class="p-4">
+<div class="flex flex-col">
+<span class="text-text-main font-bold text-base">PaymentAuthorized</span>
+<span class="text-xs text-text-sub font-mono">Commerce / Payments</span>
+</div>
+</td>
+<td class="p-4 text-text-main font-mono font-bold">892,112</td>
+<td class="p-4">
+<div class="flex items-center gap-2">
+<span class="text-text-main font-bold">98.45%</span>
+<span class="w-16 h-1.5 bg-surface-highlight rounded-full overflow-hidden border border-border-main">
+<div class="h-full bg-primary w-[98.45%]"></div>
+</span>
+</div>
+</td>
+<td class="p-4 text-text-sub font-mono font-bold">1,200ms</td>
+<td class="p-4">
+<span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-black bg-warning-bg text-warning-text border border-warning-border uppercase tracking-wide">Warning</span>
+</td>
+<td class="p-4 text-right">
+<button class="text-text-sub hover:text-primary transition-colors border border-transparent hover:border-border-main rounded p-1">
+<span class="material-symbols-outlined !text-[20px] font-bold">chevron_right</span>
+</button>
+</td>
+</tr>
+<tr class="bg-error-bg/20 border-l-[6px] border-l-red-600 cursor-pointer">
+<td class="p-4">
+<div class="flex flex-col">
+<span class="text-text-main font-bold text-base">InventorySync</span>
+<span class="text-xs text-text-sub font-mono">Operations / Async</span>
+</div>
+</td>
+<td class="p-4 text-text-main font-mono font-bold">12,400</td>
+<td class="p-4">
+<div class="flex items-center gap-2">
+<span class="text-text-main font-bold">82.10%</span>
+<span class="w-16 h-1.5 bg-surface-highlight rounded-full overflow-hidden border border-border-main">
+<div class="h-full bg-red-600 w-[82.10%]"></div>
+</span>
+</div>
+</td>
+<td class="p-4 text-text-sub font-mono font-bold">5,400ms</td>
+<td class="p-4">
+<span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-black bg-error-bg text-error-text border border-error-border uppercase tracking-wide">CRITICAL</span>
+</td>
+<td class="p-4 text-right">
+<button class="text-text-sub hover:text-primary transition-colors border border-transparent hover:border-border-main rounded p-1">
+<span class="material-symbols-outlined !text-[20px] font-bold">chevron_right</span>
+</button>
+</td>
+</tr>
+<tr class="hover:bg-surface-highlight cursor-pointer group transition-colors">
+<td class="p-4">
+<div class="flex flex-col">
+<span class="text-text-main font-bold text-base">UserLogin</span>
+<span class="text-xs text-text-sub font-mono">Identity / Auth</span>
+</div>
+</td>
+<td class="p-4 text-text-main font-mono font-bold">450,900</td>
+<td class="p-4">
+<div class="flex items-center gap-2">
+<span class="text-text-main font-bold">99.99%</span>
+<span class="w-16 h-1.5 bg-surface-highlight rounded-full overflow-hidden border border-border-main">
+<div class="h-full bg-green-500 w-[99.99%]"></div>
+</span>
+</div>
+</td>
+<td class="p-4 text-text-sub font-mono font-bold">85ms</td>
+<td class="p-4">
+<span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-black bg-success-bg text-success-text border border-success-border uppercase tracking-wide">Healthy</span>
+</td>
+<td class="p-4 text-right">
+<button class="text-text-sub hover:text-primary transition-colors border border-transparent hover:border-border-main rounded p-1">
+<span class="material-symbols-outlined !text-[20px] font-bold">chevron_right</span>
+</button>
+</td>
+</tr>
+</tbody>
+</table>
+<div class="px-4 py-3 border-t-2 border-border-main flex items-center justify-between bg-surface-highlight">
+<p class="text-xs font-bold text-text-sub">Showing 1 to 4 of 142 Event Types</p>
+<div class="flex gap-2">
+<button class="px-3 py-1 text-xs font-bold text-text-main border-2 border-border-main rounded bg-surface hover:bg-black disabled:opacity-50 disabled:cursor-not-allowed transition-colors" disabled="">Previous</button>
+<button class="px-3 py-1 text-xs font-bold text-black border-2 border-primary rounded bg-primary hover:bg-primary-hover transition-colors">Next</button>
+</div>
+</div>
+</div>
+</div>
+</div>
+</main>
+</div>
+
+</body></html>
