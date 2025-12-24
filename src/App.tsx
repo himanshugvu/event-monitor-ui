@@ -1,4 +1,12 @@
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import {
+  type ReactNode,
+  type MouseEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 type ThemeMode = "light" | "dark";
 type ScreenMode = "home" | "event";
@@ -12,10 +20,13 @@ type Kpis = {
   successRate: number;
   retriableFailures: number;
   avgLatencyMs: number;
+  p95LatencyMs: number;
 };
 
 type EventBreakdownRow = {
   eventKey: string;
+  eventName: string;
+  category: string;
   total: number;
   success: number;
   failure: number;
@@ -85,10 +96,12 @@ type FailureRow = SuccessRow & {
 type PagedRowsResponse<T> = {
   page: number;
   size: number;
+  total: number;
   rows: T[];
 };
 
-type EventMeta = {
+type EventCatalogItem = {
+  eventKey: string;
   name: string;
   category: string;
 };
@@ -98,17 +111,6 @@ type EventRow = EventBreakdownRow & {
   category: string;
   status: StatusTone;
 };
-
-const EVENT_META: Record<string, EventMeta> = {
-  "payments.in": { name: "PaymentAuthorized", category: "Commerce / Payments" },
-  "loans.in": { name: "LoanDisbursed", category: "Lending / Core" },
-  "cards.in": { name: "CardActivated", category: "Cards / Lifecycle" },
-  "accounts.in": { name: "AccountOpened", category: "Accounts / Core" },
-  "transfers.in": { name: "TransferCompleted", category: "Transfers / Payments" },
-  "alerts.in": { name: "AlertTriggered", category: "Monitoring / Alerts" },
-};
-
-const EVENT_KEYS = Object.keys(EVENT_META);
 const THEME_STORAGE_KEY = "event-monitor-ui-theme";
 const API_BASE = (import.meta.env.VITE_API_BASE ?? "").replace(/\/$/, "");
 
@@ -153,6 +155,39 @@ const formatLatency = (value?: number) => {
     return "--";
   }
   return `${Math.round(value)}ms`;
+};
+
+const sortBucketsByTime = (buckets: BucketPoint[]) => {
+  if (buckets.length <= 1) {
+    return buckets;
+  }
+  return [...buckets].sort((left, right) => {
+    const leftTime = parseDate(left.bucketStart)?.getTime() ?? 0;
+    const rightTime = parseDate(right.bucketStart)?.getTime() ?? 0;
+    return leftTime - rightTime;
+  });
+};
+
+const buildDeltaLabel = (
+  buckets: BucketPoint[],
+  getValue: (bucket: BucketPoint) => number,
+  formatter: (value: number) => string
+) => {
+  const sorted = sortBucketsByTime(buckets);
+  if (sorted.length < 2) {
+    return "No recent change";
+  }
+  const current = getValue(sorted[sorted.length - 1]);
+  const previous = getValue(sorted[sorted.length - 2]);
+  if (!Number.isFinite(current) || !Number.isFinite(previous)) {
+    return "No recent change";
+  }
+  const delta = current - previous;
+  if (Math.abs(delta) < 0.0001) {
+    return "No recent change";
+  }
+  const sign = delta > 0 ? "+" : "-";
+  return `${sign}${formatter(Math.abs(delta))} vs prev hour`;
 };
 
 const parseDate = (value?: unknown) => {
@@ -247,8 +282,16 @@ const resolveSearch = (value: string) => {
   return { traceId: trimmed, messageKey: undefined };
 };
 
-const getEventMeta = (eventKey: string): EventMeta => {
-  return EVENT_META[eventKey] ?? { name: eventKey, category: "Uncategorized" };
+const resolveCatalogEntry = (eventKey: string, catalog: EventCatalogItem[]) => {
+  const entry = catalog.find((item) => item.eventKey === eventKey);
+  if (entry) {
+    return entry;
+  }
+  return {
+    eventKey,
+    name: eventKey || "Event Details",
+    category: "Uncategorized",
+  };
 };
 
 const formatPayload = (value?: string) => {
@@ -304,6 +347,35 @@ const getAxisLabels = (buckets: BucketPoint[], labelCount = 7) => {
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
+const smoothSeries = (values: number[], windowSize = 3) => {
+  if (values.length <= 2 || windowSize <= 1) {
+    return values;
+  }
+  const radius = Math.floor(windowSize / 2);
+  return values.map((_, index) => {
+    const start = Math.max(0, index - radius);
+    const end = Math.min(values.length - 1, index + radius);
+    let sum = 0;
+    let count = 0;
+    for (let i = start; i <= end; i += 1) {
+      sum += values[i];
+      count += 1;
+    }
+    return count > 0 ? sum / count : values[index];
+  });
+};
+
+const getNiceMax = (value: number) => {
+  if (!Number.isFinite(value) || value <= 0) {
+    return 1;
+  }
+  const magnitude = Math.pow(10, Math.floor(Math.log10(value)));
+  const scaled = value / magnitude;
+  const rounded =
+    scaled <= 1 ? 1 : scaled <= 2 ? 2 : scaled <= 5 ? 5 : 10;
+  return rounded * magnitude;
+};
+
 const buildLinePath = (points: Array<{ x: number; y: number }>) => {
   if (!points.length) {
     return "";
@@ -353,23 +425,46 @@ async function fetchJson<T>(path: string, signal?: AbortSignal): Promise<T> {
 export default function App() {
   const [theme, setTheme] = useState<ThemeMode>(getInitialTheme);
   const [screen, setScreen] = useState<ScreenMode>("home");
+  const [activeNav, setActiveNav] = useState("home");
   const [dayMode, setDayMode] = useState<DayMode>("today");
   const [day, setDay] = useState(() => toLocalDayString(new Date()));
-  const [selectedEvent, setSelectedEvent] = useState<string>(EVENT_KEYS[0] ?? "");
-  const activeMeta = getEventMeta(selectedEvent);
+  const [eventCatalog, setEventCatalog] = useState<EventCatalogItem[]>([]);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [selectedEvent, setSelectedEvent] = useState<string>("");
+  const activeMeta = resolveCatalogEntry(selectedEvent, eventCatalog);
   const headerTitle = screen === "home" ? "Home - Global Aggregation" : `Event Details - ${activeMeta.name}`;
   const headerSub = screen === "home" ? "Dashboard" : "Events Log";
   const navItems = [
     { id: "home", label: "Global Aggregation", icon: "dashboard", screen: "home" as ScreenMode },
     { id: "event", label: "Events Log", icon: "list", screen: "event" as ScreenMode },
     { id: "failures", label: "Failure Analysis", icon: "bug_report", screen: "event" as ScreenMode },
-    { id: "settings", label: "Settings", icon: "settings", screen: null },
   ];
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     window.localStorage.setItem(THEME_STORAGE_KEY, theme);
   }, [theme]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setCatalogError(null);
+    fetchJson<EventCatalogItem[]>("/api/v1/events", controller.signal)
+      .then((data) => {
+        setEventCatalog(data ?? []);
+      })
+      .catch((error) => {
+        if (!isAbortError(error)) {
+          setCatalogError(error instanceof Error ? error.message : String(error));
+        }
+      });
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    if (!selectedEvent && eventCatalog.length > 0) {
+      setSelectedEvent(eventCatalog[0].eventKey);
+    }
+  }, [selectedEvent, eventCatalog]);
 
   useEffect(() => {
     if (dayMode === "today") {
@@ -390,7 +485,7 @@ export default function App() {
         </div>
         <nav className="sidebar-nav">
           {navItems.map((item) => {
-            const isActive = item.screen === screen;
+            const isActive = item.id === activeNav;
             return (
               <button
                 key={item.id}
@@ -398,6 +493,7 @@ export default function App() {
                 onClick={() => {
                   if (item.screen) {
                     setScreen(item.screen);
+                    setActiveNav(item.id);
                   }
                 }}
                 aria-current={isActive ? "page" : undefined}
@@ -447,12 +543,14 @@ export default function App() {
           </div>
         </header>
         <div className="content">
+          {catalogError && <div className="banner error">Failed to load event list: {catalogError}</div>}
           {screen === "home" ? (
             <HomeScreen
               day={day}
               onOpenEvent={(eventKey) => {
                 setSelectedEvent(eventKey);
                 setScreen("event");
+                setActiveNav("event");
               }}
             />
           ) : (
@@ -461,8 +559,13 @@ export default function App() {
               dayMode={dayMode}
               onDayModeChange={setDayMode}
               onDayChange={setDay}
+              onNavigateHome={() => {
+                setScreen("home");
+                setActiveNav("home");
+              }}
               selectedEvent={selectedEvent}
               onSelectEvent={setSelectedEvent}
+              eventCatalog={eventCatalog}
             />
           )}
         </div>
@@ -587,28 +690,16 @@ function HomeScreen({ day, onOpenEvent }: HomeScreenProps) {
       return [];
     }
     return home.events.map((event) => {
-      const meta = getEventMeta(event.eventKey);
+      const name = event.eventName?.trim() ? event.eventName : event.eventKey;
+      const category = event.category?.trim() ? event.category : "Uncategorized";
       return {
         ...event,
-        name: meta.name,
-        category: meta.category,
+        name,
+        category,
         status: getStatusTone(event.successRate),
       };
     });
   }, [home]);
-
-  const alertSummary = useMemo(() => {
-    let critical = 0;
-    let warning = 0;
-    eventRows.forEach((event) => {
-      if (event.status === "critical") {
-        critical += 1;
-      } else if (event.status === "warning") {
-        warning += 1;
-      }
-    });
-    return { critical, warning, total: critical + warning };
-  }, [eventRows]);
 
   const failureInsights = useMemo(() => {
     if (!home) {
@@ -619,10 +710,10 @@ function HomeScreen({ day, onOpenEvent }: HomeScreenProps) {
       .sort((a, b) => b.failure - a.failure)
       .slice(0, 3)
       .map((event) => {
-        const meta = getEventMeta(event.eventKey);
+        const name = event.eventName?.trim() ? event.eventName : event.eventKey;
         return {
           tone: getStatusTone(event.successRate),
-          title: `${meta.name} failure spike`,
+          title: `${name} failure spike`,
           detail: `${formatNumber(event.failure)} failures, ${formatNumber(
             event.retriableFailures
           )} retriable`,
@@ -632,7 +723,7 @@ function HomeScreen({ day, onOpenEvent }: HomeScreenProps) {
   }, [home]);
 
   const chartBuckets = homeBuckets ?? [];
-  const primaryEventKey = eventRows[0]?.eventKey ?? EVENT_KEYS[0] ?? "";
+  const primaryEventKey = eventRows[0]?.eventKey ?? "";
   const canOpenInsights = primaryEventKey.length > 0;
 
   return (
@@ -640,45 +731,35 @@ function HomeScreen({ day, onOpenEvent }: HomeScreenProps) {
       {homeError && <div className="banner error">Failed to load home data: {homeError}</div>}
 
       <div className="kpi-grid">
-        <KpiCard title="Total Events" value={home ? formatNumber(home.kpis.total) : "--"} icon="functions" tone="neutral">
-          <div className="kpi-trend success">
-            <span className="material-symbols-outlined">trending_up</span>
-            {home ? "+12% from last hour" : "Loading trend"}
-          </div>
-        </KpiCard>
+        <KpiCard title="Total Events" value={home ? formatNumber(home.kpis.total) : "--"} icon="functions" tone="neutral" />
+        <KpiCard title="Success" value={home ? formatNumber(home.kpis.success) : "--"} icon="check_circle" tone="success" />
+        <KpiCard title="Failures" value={home ? formatNumber(home.kpis.failure) : "--"} icon="warning" tone="danger" />
         <KpiCard
           title="Success Rate"
           value={home ? formatPercent(home.kpis.successRate) : "--"}
-          icon="check_circle"
+          icon="percent"
           tone="success"
-        >
-          <div className="kpi-trend success">
-            <span className="material-symbols-outlined">trending_up</span>
-            {home ? "Stable" : "Loading trend"}
-          </div>
-        </KpiCard>
+        />
+        <KpiCard
+          title="Retriable Failures"
+          value={home ? formatNumber(home.kpis.retriableFailures) : "--"}
+          icon="history"
+          tone="warning"
+        />
         <KpiCard
           title="Avg Latency"
           value={home ? formatLatency(home.kpis.avgLatencyMs) : "--"}
           icon="timer"
           tone="info"
-        >
-          <div className="kpi-trend latency">
-            <span className="material-symbols-outlined">trending_flat</span>
-            {home ? "+2ms increase" : "Loading trend"}
-          </div>
-        </KpiCard>
+          subtitle="Success only"
+        />
         <KpiCard
-          title="Active Alerts"
-          value={home ? String(alertSummary.total) : "--"}
-          icon="warning"
-          tone="danger"
-        >
-          <div className="kpi-trend danger">
-            <span className="material-symbols-outlined">priority_high</span>
-            {home ? `${alertSummary.critical} critical` : "Loading alerts"}
-          </div>
-        </KpiCard>
+          title="P95 Latency"
+          value={home ? formatLatency(home.kpis.p95LatencyMs) : "--"}
+          icon="insights"
+          tone="info"
+          subtitle="Success only"
+        />
       </div>
 
       <HourlyTrendsPanel
@@ -778,16 +859,21 @@ type EventDetailsScreenProps = {
   dayMode: DayMode;
   onDayModeChange: (value: DayMode) => void;
   onDayChange: (value: string) => void;
+  onNavigateHome: () => void;
   selectedEvent: string;
   onSelectEvent: (value: string) => void;
+  eventCatalog: EventCatalogItem[];
 };
 
 function EventDetailsScreen({
   day,
+  dayMode,
   onDayModeChange,
   onDayChange,
+  onNavigateHome,
   selectedEvent,
   onSelectEvent,
+  eventCatalog,
 }: EventDetailsScreenProps) {
   const [summary, setSummary] = useState<EventSummaryResponse | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
@@ -799,9 +885,14 @@ function EventDetailsScreen({
   const [bucketInterval, setBucketInterval] = useState(60);
   const [tab, setTab] = useState<"success" | "failures">("failures");
   const [searchTerm, setSearchTerm] = useState("");
+  const [searchField, setSearchField] = useState<"trace" | "message">("trace");
+  const [searchValue, setSearchValue] = useState("");
   const [accountNumber, setAccountNumber] = useState("");
+  const [accountInput, setAccountInput] = useState("");
   const [exceptionType, setExceptionType] = useState("");
+  const [exceptionInput, setExceptionInput] = useState("");
   const [retriable, setRetriable] = useState<"all" | "true" | "false">("all");
+  const [retriableInput, setRetriableInput] = useState<"all" | "true" | "false">("all");
   const [successPage, setSuccessPage] = useState(0);
   const [failurePage, setFailurePage] = useState(0);
   const [successRows, setSuccessRows] = useState<SuccessRow[]>([]);
@@ -810,19 +901,31 @@ function EventDetailsScreen({
   const [failureLoading, setFailureLoading] = useState(false);
   const [successError, setSuccessError] = useState<string | null>(null);
   const [failureError, setFailureError] = useState<string | null>(null);
+  const [successTotal, setSuccessTotal] = useState(0);
+  const [failureTotal, setFailureTotal] = useState(0);
+  const [successPageInput, setSuccessPageInput] = useState("1");
+  const [failurePageInput, setFailurePageInput] = useState("1");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedRow, setSelectedRow] = useState<SuccessRow | FailureRow | null>(null);
   const pageSize = 50;
-  const meta = getEventMeta(selectedEvent);
+  const meta = resolveCatalogEntry(selectedEvent, eventCatalog);
+  const eventCatalogMap = useMemo(
+    () => new Map(eventCatalog.map((item) => [item.eventKey, item])),
+    [eventCatalog]
+  );
   const eventOptions = useMemo(() => {
-    const set = new Set(EVENT_KEYS);
+    const set = new Set(eventCatalog.map((item) => item.eventKey));
     if (selectedEvent) {
       set.add(selectedEvent);
     }
     return Array.from(set);
-  }, [selectedEvent]);
+  }, [eventCatalog, selectedEvent]);
 
   useEffect(() => {
+    if (!selectedEvent) {
+      setSummary(null);
+      return;
+    }
     const controller = new AbortController();
     setSummaryLoading(true);
     setSummaryError(null);
@@ -847,6 +950,10 @@ function EventDetailsScreen({
   }, [day, selectedEvent, refreshIndex]);
 
   useEffect(() => {
+    if (!selectedEvent) {
+      setBuckets(null);
+      return;
+    }
     const controller = new AbortController();
     setBucketsLoading(true);
     setBucketsError(null);
@@ -871,11 +978,19 @@ function EventDetailsScreen({
   }, [day, selectedEvent, bucketInterval, refreshIndex]);
 
   useEffect(() => {
+    if (!selectedEvent) {
+      return;
+    }
     setTab("failures");
     setSearchTerm("");
+    setSearchField("trace");
+    setSearchValue("");
     setAccountNumber("");
+    setAccountInput("");
     setExceptionType("");
+    setExceptionInput("");
     setRetriable("all");
+    setRetriableInput("all");
     setSuccessPage(0);
     setFailurePage(0);
     setDrawerOpen(false);
@@ -889,12 +1004,13 @@ function EventDetailsScreen({
   }, [summary?.kpis.failure, tab]);
 
   useEffect(() => {
-    if (tab !== "success") {
+    if (tab !== "success" || !selectedEvent) {
       return;
     }
     const controller = new AbortController();
     setSuccessLoading(true);
     setSuccessError(null);
+    setSuccessTotal(0);
     const { traceId, messageKey } = resolveSearch(searchTerm);
     const query = buildQuery({
       page: successPage,
@@ -909,6 +1025,7 @@ function EventDetailsScreen({
     )
       .then((data) => {
         setSuccessRows(data.rows ?? []);
+        setSuccessTotal(Number.isFinite(data.total) ? data.total : 0);
       })
       .catch((error) => {
         if (!isAbortError(error)) {
@@ -924,12 +1041,13 @@ function EventDetailsScreen({
   }, [tab, day, selectedEvent, successPage, searchTerm, accountNumber]);
 
   useEffect(() => {
-    if (tab !== "failures") {
+    if (tab !== "failures" || !selectedEvent) {
       return;
     }
     const controller = new AbortController();
     setFailureLoading(true);
     setFailureError(null);
+    setFailureTotal(0);
     const { traceId, messageKey } = resolveSearch(searchTerm);
     const query = buildQuery({
       page: failurePage,
@@ -947,6 +1065,7 @@ function EventDetailsScreen({
     )
       .then((data) => {
         setFailureRows(data.rows ?? []);
+        setFailureTotal(Number.isFinite(data.total) ? data.total : 0);
       })
       .catch((error) => {
         if (!isAbortError(error)) {
@@ -966,17 +1085,46 @@ function EventDetailsScreen({
   const rowsError = tab === "success" ? successError : failureError;
   const page = tab === "success" ? successPage : failurePage;
   const setPage = tab === "success" ? setSuccessPage : setFailurePage;
+  const total = tab === "success" ? successTotal : failureTotal;
+  const totalPages = total > 0 ? Math.ceil(total / pageSize) : 1;
   const canPrev = page > 0;
-  const canNext = rows.length === pageSize;
+  const canNext = page < totalPages - 1;
   const rowOffset = page * pageSize;
+  const pageInput = tab === "success" ? successPageInput : failurePageInput;
+  const setPageInput = tab === "success" ? setSuccessPageInput : setFailurePageInput;
   const bucketPoints = buckets?.buckets ?? [];
+  const successRateTrend = useMemo(
+    () => buildDeltaLabel(bucketPoints, (bucket) => bucket.successRate, formatPercent),
+    [bucketPoints]
+  );
+  const latencyTrend = useMemo(
+    () => buildDeltaLabel(bucketPoints, (bucket) => bucket.avgLatencyMs, formatLatency),
+    [bucketPoints]
+  );
   const updatedText = summaryLoading
     ? "Loading..."
     : summary?.generatedAt
     ? `Updated ${formatTimeAgo(summary.generatedAt)}`
     : "Not loaded";
 
+  const applyFilters = () => {
+    const trimmedSearch = searchValue.trim();
+    const nextSearch =
+      searchField === "message" && trimmedSearch ? `msg:${trimmedSearch}` : trimmedSearch;
+    setSearchTerm(nextSearch);
+    setAccountNumber(accountInput.trim());
+    setExceptionType(exceptionInput.trim());
+    setRetriable(retriableInput);
+    setSuccessPage(0);
+    setFailurePage(0);
+  };
+
   const clearFilters = () => {
+    setSearchField("trace");
+    setSearchValue("");
+    setAccountInput("");
+    setExceptionInput("");
+    setRetriableInput("all");
     setSearchTerm("");
     setAccountNumber("");
     setExceptionType("");
@@ -1008,32 +1156,65 @@ function EventDetailsScreen({
     };
   }, [drawerOpen]);
 
+  useEffect(() => {
+    setSuccessPageInput(String(successPage + 1));
+  }, [successPage]);
+
+  useEffect(() => {
+    setFailurePageInput(String(failurePage + 1));
+  }, [failurePage]);
+
   return (
     <section className="page">
       <div className="page-header">
         <div>
           <div className="breadcrumbs">
-            Dashboard <span>/</span> Event Monitor <span>/</span> <strong>{meta.name}</strong>
+            <button className="breadcrumb-link" type="button" onClick={onNavigateHome}>
+              Dashboard
+            </button>
+            <span>/</span>
+            <span>Event Monitor</span>
+            <span>/</span>
+            <strong>{meta.name}</strong>
           </div>
           <div className="title-row">
             <h1>{meta.name}</h1>
             <span className="badge">Live View</span>
           </div>
           <p className="subtitle">
-            Last updated: <strong>{summary?.generatedAt ? formatDateTime(summary.generatedAt) : "--"}</strong>{" "}
-            <span className="dot" /> {updatedText}
+            Last updated: <strong>{summary?.generatedAt ? formatDateTime(summary.generatedAt) : "--"}</strong>
           </p>
         </div>
         <div className="control-row">
-          <DateField day={day} onDayChange={onDayChange} onDayModeChange={onDayModeChange} />
+          <div className="day-toggle">
+            <span className="day-label">Day:</span>
+            <div className="segmented">
+              <button
+                className={dayMode === "today" ? "segment active" : "segment"}
+                onClick={() => onDayModeChange("today")}
+                type="button"
+              >
+                Today
+              </button>
+              <button
+                className={dayMode === "yesterday" ? "segment active" : "segment"}
+                onClick={() => onDayModeChange("yesterday")}
+                type="button"
+              >
+                Yesterday
+              </button>
+            </div>
+            <DateField day={day} onDayChange={onDayChange} onDayModeChange={onDayModeChange} />
+          </div>
           <div className="select">
             <span className="material-symbols-outlined">filter_list</span>
             <select value={selectedEvent} onChange={(event) => onSelectEvent(event.target.value)}>
               {eventOptions.map((eventKey) => {
-                const optionMeta = getEventMeta(eventKey);
+                const optionMeta = eventCatalogMap.get(eventKey);
+                const label = optionMeta?.name?.trim() ? optionMeta.name : eventKey;
                 return (
                   <option key={eventKey} value={eventKey}>
-                    {optionMeta.name}
+                    {label}
                   </option>
                 );
               })}
@@ -1046,6 +1227,7 @@ function EventDetailsScreen({
               <option value={15}>Last 24 hours (15 min)</option>
             </select>
           </div>
+          <span className="updated-inline">{updatedText}</span>
           <button className="button primary" onClick={() => setRefreshIndex((value) => value + 1)}>
             <span className="material-symbols-outlined">refresh</span>
             Refresh
@@ -1056,50 +1238,35 @@ function EventDetailsScreen({
       {summaryError && <div className="banner error">Failed to load summary: {summaryError}</div>}
 
       <div className="kpi-grid">
-        <KpiCard
-          title="Total Events"
-          value={summary ? formatNumber(summary.kpis.total) : "--"}
-          icon="functions"
-          tone="neutral"
-        >
-          <div className="kpi-trend success">
-            <span className="material-symbols-outlined">trending_up</span>
-            {summary ? `Success ${formatNumber(summary.kpis.success)}` : "Loading"}
-          </div>
-        </KpiCard>
+        <KpiCard title="Total Events" value={summary ? formatNumber(summary.kpis.total) : "--"} icon="functions" tone="neutral" />
+        <KpiCard title="Success" value={summary ? formatNumber(summary.kpis.success) : "--"} icon="check_circle" tone="success" />
+        <KpiCard title="Failures" value={summary ? formatNumber(summary.kpis.failure) : "--"} icon="warning" tone="danger" />
         <KpiCard
           title="Success Rate"
           value={summary ? formatPercent(summary.kpis.successRate) : "--"}
-          icon="check_circle"
+          icon="percent"
           tone="success"
-        >
-          <div className="kpi-trend success">
-            <span className="material-symbols-outlined">trending_up</span>
-            {summary ? "Stable" : "Loading"}
-          </div>
-        </KpiCard>
+        />
         <KpiCard
-          title="Failures"
-          value={summary ? formatNumber(summary.kpis.failure) : "--"}
-          icon="warning"
-          tone="danger"
-        >
-          <div className="kpi-trend danger">
-            <span className="material-symbols-outlined">priority_high</span>
-            {summary ? `Retriable ${formatNumber(summary.kpis.retriableFailures)}` : "Loading"}
-          </div>
-        </KpiCard>
+          title="Retriable Failures"
+          value={summary ? formatNumber(summary.kpis.retriableFailures) : "--"}
+          icon="history"
+          tone="warning"
+        />
         <KpiCard
-          title="Avg Processing"
+          title="Avg Latency"
           value={summary ? formatLatency(summary.kpis.avgLatencyMs) : "--"}
           icon="timer"
           tone="info"
-        >
-          <div className="kpi-trend latency">
-            <span className="material-symbols-outlined">trending_flat</span>
-            {summary ? "Latency trend" : "Loading"}
-          </div>
-        </KpiCard>
+          subtitle="Success only"
+        />
+        <KpiCard
+          title="P95 Latency"
+          value={summary ? formatLatency(summary.kpis.p95LatencyMs) : "--"}
+          icon="insights"
+          tone="info"
+          subtitle="Success only"
+        />
       </div>
 
       <HourlyTrendsPanel
@@ -1122,47 +1289,96 @@ function EventDetailsScreen({
             </button>
           </div>
 
-          <div className="table-toolbar">
-            <div className="search">
-              <span className="material-symbols-outlined">search</span>
-              <input
-                placeholder="Search traceId or msg:messageKey"
-                value={searchTerm}
-                onChange={(event) => setSearchTerm(event.target.value)}
-              />
+          <div className="filter-panel">
+            <div className="filter-header">
+              <div className="filter-title">
+                <span className="material-symbols-outlined">tune</span>
+                Filter Events
+              </div>
+              <div className="filter-actions">
+                <button className="button ghost small" onClick={clearFilters} type="button">
+                  Clear
+                </button>
+                <button className="button primary small" onClick={applyFilters} type="button">
+                  Apply
+                </button>
+              </div>
             </div>
-            <div className="toolbar-actions">
+            <div className="filter-grid">
               <div className="field">
-                <label>Account</label>
+                <label>Search by</label>
+                <div className="select">
+                  <span className="material-symbols-outlined">filter_list</span>
+                  <select
+                    value={searchField}
+                    onChange={(event) =>
+                      setSearchField(event.target.value as "trace" | "message")
+                    }
+                  >
+                    <option value="trace">Correlation ID</option>
+                    <option value="message">Message Key</option>
+                  </select>
+                </div>
+              </div>
+              <div className="field">
+                <label>Value</label>
+                <div className="search">
+                  <span className="material-symbols-outlined">search</span>
+                  <input
+                    placeholder="Enter value"
+                    value={searchValue}
+                    onChange={(event) => setSearchValue(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        applyFilters();
+                      }
+                    }}
+                  />
+                </div>
+              </div>
+              <div className="field">
+                <label>Account Number</label>
                 <input
                   placeholder="Account number"
-                  value={accountNumber}
-                  onChange={(event) => setAccountNumber(event.target.value)}
+                  value={accountInput}
+                  onChange={(event) => setAccountInput(event.target.value)}
                 />
               </div>
-              {tab === "failures" && (
+              {tab === "failures" ? (
                 <>
                   <div className="field">
                     <label>Exception</label>
                     <input
                       placeholder="Exception type"
-                      value={exceptionType}
-                      onChange={(event) => setExceptionType(event.target.value)}
+                      value={exceptionInput}
+                      onChange={(event) => setExceptionInput(event.target.value)}
                     />
                   </div>
                   <div className="field">
                     <label>Retriable</label>
-                    <select value={retriable} onChange={(event) => setRetriable(event.target.value as "all")}>
+                    <select
+                      value={retriableInput}
+                      onChange={(event) =>
+                        setRetriableInput(event.target.value as "all" | "true" | "false")
+                      }
+                    >
                       <option value="all">All</option>
                       <option value="true">Yes</option>
                       <option value="false">No</option>
                     </select>
                   </div>
                 </>
+              ) : (
+                <div className="field">
+                  <label>Status</label>
+                  <div className="select">
+                    <span className="material-symbols-outlined">task_alt</span>
+                    <select value="success" disabled>
+                      <option value="success">Success</option>
+                    </select>
+                  </div>
+                </div>
               )}
-              <button className="button ghost small" onClick={clearFilters}>
-                Clear
-              </button>
             </div>
           </div>
 
@@ -1295,9 +1511,39 @@ function EventDetailsScreen({
             <span>
               {rows.length === 0
                 ? "No results"
-                : `Showing ${rowOffset + 1} to ${rowOffset + rows.length}`}
+                : `Showing ${rowOffset + 1} to ${rowOffset + rows.length} of ${formatNumber(total)}`}
             </span>
             <div className="pager">
+              <div className="page-info">
+                Page {Math.min(page + 1, totalPages)} of {totalPages}
+              </div>
+              <label className="page-jump">
+                <span>Go to</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={totalPages}
+                  value={pageInput}
+                  onChange={(event) => setPageInput(event.target.value)}
+                  onBlur={() => {
+                    const parsed = Number(pageInput);
+                    if (!Number.isFinite(parsed)) {
+                      setPageInput(String(page + 1));
+                      return;
+                    }
+                    const clamped = clamp(Math.round(parsed), 1, totalPages);
+                    if (clamped - 1 !== page) {
+                      setPage(clamped - 1);
+                    }
+                    setPageInput(String(clamped));
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.currentTarget.blur();
+                    }
+                  }}
+                />
+              </label>
               <button disabled={!canPrev} onClick={() => setPage((value) => Math.max(0, value - 1))}>
                 Previous
               </button>
@@ -1376,9 +1622,6 @@ function EventDetailsScreen({
                 </div>
               </div>
               <div className="modal-actions">
-                <button className="button ghost" onClick={() => setDrawerOpen(false)}>
-                  Investigate
-                </button>
                 <button className="button primary" onClick={() => setDrawerOpen(false)}>
                   <span className="material-symbols-outlined">replay</span>
                   Replay Event
@@ -1444,43 +1687,6 @@ function KpiCard({
   );
 }
 
-const sampleBuckets = (buckets: BucketPoint[], count: number) => {
-  if (buckets.length <= count) {
-    return buckets;
-  }
-  const lastIndex = buckets.length - 1;
-  return Array.from({ length: count }, (_, index) => {
-    const position = Math.round((lastIndex * index) / (count - 1));
-    return buckets[position];
-  });
-};
-
-function MiniVolumePanel({
-  title,
-  value,
-  tone,
-  bars,
-}: {
-  title: string;
-  value: string;
-  tone: "success" | "failure";
-  bars: number[];
-}) {
-  return (
-    <div className={`mini-panel ${tone}`}>
-      <div className="mini-header">
-        <span>{title}</span>
-        <span className="mini-value mono">{value}</span>
-      </div>
-      <div className="mini-bars">
-        {bars.map((height, index) => (
-          <span key={`${title}-${index}`} style={{ height: `${height}%` }} />
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function HourlyTrendsPanel({
   title,
   subtitle,
@@ -1494,29 +1700,124 @@ function HourlyTrendsPanel({
   loading?: boolean;
   error?: string | null;
 }) {
-  const hasData = buckets.length > 0;
-  const axisLabels = useMemo(() => getAxisLabels(buckets, 7).map((label) => label), [buckets]);
-  const latencyValues = useMemo(() => buckets.map((bucket) => bucket.avgLatencyMs ?? 0), [buckets]);
-  const latencyMax = useMemo(() => Math.max(500, ...latencyValues, 1), [latencyValues]);
+  const rangeOptions = [1, 6, 12, 24];
+  const [rangeHours, setRangeHours] = useState(24);
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const linesRef = useRef<HTMLDivElement | null>(null);
+  const sortedBuckets = useMemo(() => {
+    if (buckets.length <= 1) {
+      return buckets;
+    }
+    return [...buckets].sort((left, right) => {
+      const leftTime = parseDate(left.bucketStart)?.getTime() ?? 0;
+      const rightTime = parseDate(right.bucketStart)?.getTime() ?? 0;
+      return leftTime - rightTime;
+    });
+  }, [buckets]);
+  const displayBuckets = useMemo(() => {
+    if (!sortedBuckets.length || rangeHours >= 24) {
+      return sortedBuckets;
+    }
+    const latestTime = parseDate(sortedBuckets[sortedBuckets.length - 1]?.bucketStart)?.getTime();
+    if (!latestTime) {
+      return sortedBuckets;
+    }
+    const cutoff = latestTime - rangeHours * 60 * 60 * 1000;
+    const filtered = sortedBuckets.filter((bucket) => {
+      const time = parseDate(bucket.bucketStart)?.getTime();
+      return typeof time === "number" && !Number.isNaN(time) && time >= cutoff;
+    });
+    if (filtered.length >= 2) {
+      return filtered;
+    }
+    return sortedBuckets.slice(-Math.min(2, sortedBuckets.length));
+  }, [sortedBuckets, rangeHours]);
+  const hasData = displayBuckets.length > 0;
+  const axisLabels = useMemo(() => getAxisLabels(displayBuckets, 7), [displayBuckets]);
+  const rawLatencyValues = useMemo(
+    () => displayBuckets.map((bucket) => bucket.avgLatencyMs ?? 0),
+    [displayBuckets]
+  );
+  const rawSuccessRates = useMemo(() => {
+    return displayBuckets.map((bucket) => {
+      const total = bucket.total || bucket.success + bucket.failure;
+      return total > 0 ? (bucket.success / total) * 100 : bucket.successRate ?? 0;
+    });
+  }, [displayBuckets]);
+  const rawFailureRates = useMemo(() => {
+    return displayBuckets.map((bucket) => {
+      const total = bucket.total || bucket.success + bucket.failure;
+      return total > 0 ? (bucket.failure / total) * 100 : 0;
+    });
+  }, [displayBuckets]);
+  const smoothLatencyValues = useMemo(
+    () => smoothSeries(rawLatencyValues, 3),
+    [rawLatencyValues]
+  );
+  const smoothSuccessRates = useMemo(
+    () => smoothSeries(rawSuccessRates, 3),
+    [rawSuccessRates]
+  );
+  const smoothFailureRates = useMemo(
+    () => smoothSeries(rawFailureRates, 3),
+    [rawFailureRates]
+  );
+  const latencyMax = useMemo(() => {
+    const maxValue = Math.max(...rawLatencyValues, 0);
+    return maxValue > 0 ? getNiceMax(maxValue) : 1;
+  }, [rawLatencyValues]);
+  const timeBounds = useMemo(() => {
+    const times = displayBuckets
+      .map((bucket) => parseDate(bucket.bucketStart)?.getTime())
+      .filter((value): value is number => typeof value === "number" && !Number.isNaN(value));
+    if (!times.length) {
+      return null;
+    }
+    const min = Math.min(...times);
+    const max = Math.max(...times);
+    return { min, max: max === min ? min + 1 : max };
+  }, [displayBuckets]);
   const points = useMemo(() => {
-    const count = buckets.length;
-    return buckets.map((bucket, index) => {
-      const x = count <= 1 ? 0 : (index / (count - 1)) * 100;
-      const total = bucket.total || 0;
-      const successRate = total ? (bucket.success / total) * 100 : 0;
-      const failureRate = total ? (bucket.failure / total) * 100 : 0;
-      const latencyValue = bucket.avgLatencyMs ?? 0;
+    const count = displayBuckets.length;
+    return displayBuckets.map((bucket, index) => {
+      const rawSuccessRate = rawSuccessRates[index] ?? 0;
+      const rawFailureRate = rawFailureRates[index] ?? 0;
+      const rawLatencyValue = rawLatencyValues[index] ?? 0;
+      const successRate = smoothSuccessRates[index] ?? rawSuccessRate;
+      const failureRate = smoothFailureRates[index] ?? rawFailureRate;
+      const latencyValue = smoothLatencyValues[index] ?? rawLatencyValue;
+      const time = parseDate(bucket.bucketStart)?.getTime();
+      const x = timeBounds
+        ? (clamp((time ?? timeBounds.min) - timeBounds.min, 0, timeBounds.max - timeBounds.min) /
+            (timeBounds.max - timeBounds.min)) *
+          100
+        : count <= 1
+        ? 0
+        : (index / (count - 1)) * 100;
       return {
         x,
         successRate,
         failureRate,
         latencyValue,
-        successY: 100 - successRate,
-        failureY: 100 - failureRate,
+        rawSuccessRate,
+        rawFailureRate,
+        rawLatencyValue,
+        successY: 100 - clamp(successRate, 0, 100),
+        failureY: 100 - clamp(failureRate, 0, 100),
         latencyY: 100 - (clamp(latencyValue, 0, latencyMax) / latencyMax) * 100,
       };
     });
-  }, [buckets, latencyMax]);
+  }, [
+    displayBuckets,
+    timeBounds,
+    latencyMax,
+    rawSuccessRates,
+    rawFailureRates,
+    rawLatencyValues,
+    smoothSuccessRates,
+    smoothFailureRates,
+    smoothLatencyValues,
+  ]);
   const successPath = buildLinePath(points.map((point) => ({ x: point.x, y: point.successY })));
   const failurePath = buildLinePath(points.map((point) => ({ x: point.x, y: point.failureY })));
   const latencyPath = buildLinePath(points.map((point) => ({ x: point.x, y: point.latencyY })));
@@ -1530,24 +1831,41 @@ function HourlyTrendsPanel({
       return point.failureRate > points[maxIndex].failureRate ? index : maxIndex;
     }, 0);
   }, [points]);
-  const focusPoint = focusIndex >= 0 ? points[focusIndex] : null;
-  const focusBucket = focusIndex >= 0 ? buckets[focusIndex] : null;
-  const focusX = focusPoint ? focusPoint.x : 0;
-  const tooltipLeft = clamp(focusX, 10, 90);
+  const activeIndex = hoverIndex ?? focusIndex;
+  const activePoint = activeIndex >= 0 ? points[activeIndex] : null;
+  const activeBucket = activeIndex >= 0 ? displayBuckets[activeIndex] : null;
+  const activeX = activePoint ? activePoint.x : 0;
+  const tooltipLeft = clamp(activeX, 8, 92);
 
-  const successBars = useMemo(() => {
-    const sample = sampleBuckets(buckets, 15);
-    const maxValue = Math.max(1, ...sample.map((bucket) => bucket.success));
-    return sample.map((bucket) => Math.round((bucket.success / maxValue) * 100));
-  }, [buckets]);
-  const failureBars = useMemo(() => {
-    const sample = sampleBuckets(buckets, 15);
-    const maxValue = Math.max(1, ...sample.map((bucket) => bucket.failure));
-    return sample.map((bucket) => Math.round((bucket.failure / maxValue) * 100));
-  }, [buckets]);
-  const totalSuccess = buckets.reduce((sum, bucket) => sum + bucket.success, 0);
-  const totalFailure = buckets.reduce((sum, bucket) => sum + bucket.failure, 0);
   const latencyTicks = [1, 0.75, 0.5, 0.25, 0].map((ratio) => Math.round(latencyMax * ratio));
+  const handleMouseMove = useCallback(
+    (event: MouseEvent<HTMLDivElement>) => {
+      if (!points.length) {
+        return;
+      }
+      const bounds = linesRef.current?.getBoundingClientRect();
+      if (!bounds || bounds.width === 0) {
+        return;
+      }
+      const relative = clamp((event.clientX - bounds.left) / bounds.width, 0, 1);
+      const targetX = relative * 100;
+      let nearestIndex = 0;
+      let nearestDistance = Number.POSITIVE_INFINITY;
+      points.forEach((point, index) => {
+        const distance = Math.abs(point.x - targetX);
+        if (distance < nearestDistance) {
+          nearestDistance = distance;
+          nearestIndex = index;
+        }
+      });
+      setHoverIndex(nearestIndex);
+    },
+    [points]
+  );
+
+  useEffect(() => {
+    setHoverIndex(null);
+  }, [displayBuckets, rangeHours]);
 
   return (
     <div className="trend-panel">
@@ -1578,12 +1896,17 @@ function HourlyTrendsPanel({
             </span>
           </div>
           <div className="trend-range">
-            <button type="button">1H</button>
-            <button type="button">6H</button>
-            <button type="button">12H</button>
-            <button className="active" type="button">
-              24H
-            </button>
+            {rangeOptions.map((hours) => (
+              <button
+                key={hours}
+                type="button"
+                className={hours === rangeHours ? "active" : undefined}
+                aria-pressed={hours === rangeHours}
+                onClick={() => setRangeHours(hours)}
+              >
+                {hours}H
+              </button>
+            ))}
           </div>
         </div>
       </div>
@@ -1596,7 +1919,7 @@ function HourlyTrendsPanel({
       ) : (
         <>
           <div className="trend-body">
-            <div className="trend-chart">
+            <div className="trend-chart" onMouseMove={handleMouseMove} onMouseLeave={() => setHoverIndex(null)}>
               <div className="trend-grid">
                 <span />
                 <span />
@@ -1616,7 +1939,7 @@ function HourlyTrendsPanel({
                   <span key={`lat-${index}`}>{tick}ms</span>
                 ))}
               </div>
-              <div className="trend-lines">
+              <div className="trend-lines" ref={linesRef}>
                 <svg viewBox="0 0 100 100" preserveAspectRatio="none">
                   <path className="line success" d={successPath} />
                 </svg>
@@ -1633,28 +1956,28 @@ function HourlyTrendsPanel({
                   <path className="line latency-fill" d={latencyAreaPath} fill="url(#latencyFill)" />
                   <path className="line latency" d={latencyPath} />
                 </svg>
+                {activePoint && <div className="trend-marker" style={{ left: `${activeX}%` }} />}
+                {activePoint && activeBucket && (
+                  <div className="trend-tooltip" style={{ left: `${tooltipLeft}%` }}>
+                    <div className="trend-tooltip-header">
+                      <span className="mono">{formatTooltipTime(activeBucket.bucketStart)}</span>
+                      {activePoint.rawFailureRate > 5 && <span className="trend-flag">Issue</span>}
+                    </div>
+                    <div className="trend-tooltip-grid">
+                      <span className="dot success" />
+                      <span>Success</span>
+                      <span className="mono">{formatPercent(activePoint.rawSuccessRate)}</span>
+                      <span className="dot failure" />
+                      <span>Failure</span>
+                      <span className="mono">{formatPercent(activePoint.rawFailureRate)}</span>
+                      <span className="dot latency" />
+                      <span>Latency</span>
+                      <span className="mono">{formatLatency(activePoint.rawLatencyValue)}</span>
+                    </div>
+                    <div className="trend-tooltip-arrow" />
+                  </div>
+                )}
               </div>
-              {focusPoint && <div className="trend-marker" style={{ left: `${focusX}%` }} />}
-              {focusPoint && focusBucket && (
-                <div className="trend-tooltip" style={{ left: `${tooltipLeft}%` }}>
-                  <div className="trend-tooltip-header">
-                    <span className="mono">{formatTooltipTime(focusBucket.bucketStart)}</span>
-                    {focusPoint.failureRate > 5 && <span className="trend-flag">Issue</span>}
-                  </div>
-                  <div className="trend-tooltip-grid">
-                    <span className="dot success" />
-                    <span>Success</span>
-                    <span className="mono">{formatPercent(focusPoint.successRate)}</span>
-                    <span className="dot failure" />
-                    <span>Failure</span>
-                    <span className="mono">{formatPercent(focusPoint.failureRate)}</span>
-                    <span className="dot latency" />
-                    <span>Latency</span>
-                    <span className="mono">{formatLatency(focusPoint.latencyValue)}</span>
-                  </div>
-                  <div className="trend-tooltip-arrow" />
-                </div>
-              )}
             </div>
             <div className="trend-axis-bottom">
               {axisLabels.map((label, index) => (
@@ -1668,20 +1991,6 @@ function HourlyTrendsPanel({
             </div>
           </div>
 
-          <div className="mini-grid">
-            <MiniVolumePanel
-              title="Success Volume"
-              value={formatNumber(totalSuccess)}
-              tone="success"
-              bars={successBars}
-            />
-            <MiniVolumePanel
-              title="Failure Volume"
-              value={formatNumber(totalFailure)}
-              tone="failure"
-              bars={failureBars}
-            />
-          </div>
         </>
       )}
     </div>

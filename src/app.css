@@ -267,11 +267,11 @@ button {
 }
 
 .top-header {
-  height: 64px;
+  height: 60px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 1.5rem;
+  padding: 0 1.25rem;
   background: rgba(255, 252, 249, 0.85);
   backdrop-filter: blur(12px);
   border-bottom: var(--border-width) solid var(--border);
@@ -310,13 +310,13 @@ button {
 }
 
 .content {
-  padding: 1.5rem 1.5rem 2.5rem;
+  padding: 1.25rem 1.25rem 2rem;
   width: 100%;
   max-width: 1280px;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 1.25rem;
 }
 
 @media (min-width: 1024px) {
@@ -542,6 +542,27 @@ input::placeholder {
   color: var(--text-sub);
 }
 
+.breadcrumb-link {
+  border: none;
+  background: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.breadcrumb-link:hover {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.breadcrumb-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .breadcrumbs span {
   margin: 0 0.35rem;
 }
@@ -600,6 +621,25 @@ input::placeholder {
   align-items: center;
   gap: 0.8rem;
   flex-wrap: wrap;
+}
+
+.day-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.day-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-sub);
+}
+
+.updated-inline {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-sub);
 }
 
 .updated-row {
@@ -780,16 +820,22 @@ input::placeholder {
 .kpi-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 1rem;
+  gap: 0.75rem;
+}
+
+@media (min-width: 1024px) {
+  .kpi-grid {
+    grid-template-columns: repeat(7, minmax(140px, 1fr));
+  }
 }
 
 .kpi-card {
   border: var(--border-width) solid var(--border);
   border-radius: 14px;
-  padding: 1rem;
+  padding: 0.85rem;
   background: var(--surface);
   box-shadow: var(--shadow-soft);
-  min-height: 120px;
+  min-height: 110px;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -824,8 +870,12 @@ input::placeholder {
   color: var(--latency);
 }
 
+.kpi-card.warning .kpi-head .material-symbols-outlined {
+  color: var(--warning);
+}
+
 .kpi-value {
-  font-size: 1.6rem;
+  font-size: 1.45rem;
   font-weight: 700;
 }
 
@@ -863,12 +913,12 @@ input::placeholder {
 .home {
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 1.25rem;
 }
 
 .home-grid {
   display: grid;
-  gap: 1.5rem;
+  gap: 1.25rem;
 }
 
 .card {
@@ -884,14 +934,14 @@ input::placeholder {
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding: 1rem 1.5rem;
+  padding: 0.85rem 1.2rem;
   border-bottom: var(--border-width) solid var(--border);
   background: var(--surface-2);
 }
 
 .card-header h3 {
   margin: 0;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   font-weight: 700;
   display: flex;
   align-items: center;
@@ -943,7 +993,7 @@ input::placeholder {
 }
 
 .trend-header {
-  padding: 1.2rem 1.5rem;
+  padding: 0.9rem 1.2rem;
   border-bottom: var(--border-width) solid var(--border);
   background: rgba(247, 245, 240, 0.6);
   display: flex;
@@ -961,7 +1011,7 @@ input::placeholder {
 
 .trend-title h3 {
   margin: 0;
-  font-size: 1rem;
+  font-size: 0.95rem;
   font-weight: 700;
 }
 
@@ -989,8 +1039,8 @@ input::placeholder {
 }
 
 .trend-header p {
-  margin: 0.4rem 0 0;
-  font-size: 0.75rem;
+  margin: 0.3rem 0 0;
+  font-size: 0.7rem;
   color: var(--text-sub);
   font-weight: 500;
 }
@@ -1006,7 +1056,7 @@ input::placeholder {
   display: flex;
   align-items: center;
   gap: 0.8rem;
-  font-size: 0.7rem;
+  font-size: 0.65rem;
   font-weight: 600;
   color: var(--text-sub);
 }
@@ -1053,10 +1103,10 @@ input::placeholder {
 .trend-range button {
   border: none;
   background: transparent;
-  font-size: 0.65rem;
+  font-size: 0.6rem;
   font-weight: 600;
   color: var(--text-sub);
-  padding: 0.2rem 0.6rem;
+  padding: 0.15rem 0.5rem;
   border-radius: 8px;
 }
 
@@ -1068,15 +1118,16 @@ input::placeholder {
 }
 
 .trend-body {
-  padding: 1rem 1.5rem 0;
+  padding: 0.75rem 1.2rem 0;
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.6rem;
 }
 
 .trend-chart {
   position: relative;
-  height: 320px;
+  height: 260px;
+  cursor: crosshair;
 }
 
 .trend-grid {
@@ -1097,12 +1148,12 @@ input::placeholder {
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 56px;
+  width: 50px;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
   padding: 0.5rem 0;
-  font-size: 0.65rem;
+  font-size: 0.6rem;
   font-weight: 600;
   font-family: var(--font-mono);
   color: var(--text-sub);
@@ -1111,21 +1162,23 @@ input::placeholder {
 .trend-axis.left {
   left: 0;
   text-align: right;
-  padding-right: 0.8rem;
+  padding-right: 0.6rem;
   border-right: var(--border-width) solid rgba(232, 226, 217, 0.6);
 }
 
 .trend-axis.right {
   right: 0;
   text-align: left;
-  padding-left: 0.8rem;
+  padding-left: 0.6rem;
   border-left: var(--border-width) solid rgba(232, 226, 217, 0.6);
   color: var(--latency);
 }
 
 .trend-lines {
   position: absolute;
-  inset: 0 56px;
+  inset: 0 50px;
+  z-index: 1;
+  pointer-events: none;
 }
 
 .trend-lines svg {
@@ -1133,11 +1186,12 @@ input::placeholder {
   inset: 0;
   width: 100%;
   height: 100%;
+  pointer-events: none;
 }
 
 .trend-lines .line {
   fill: none;
-  stroke-width: 2;
+  stroke-width: 1;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -1152,7 +1206,7 @@ input::placeholder {
 
 .trend-lines .line.latency {
   stroke: var(--latency);
-  stroke-dasharray: 4 4;
+  stroke-dasharray: 3 3;
 }
 
 .trend-lines .line.latency-fill {
@@ -1163,9 +1217,10 @@ input::placeholder {
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 1px;
+  width: 0.5px;
   background: rgba(45, 42, 38, 0.2);
   transform: translateX(-50%);
+  pointer-events: none;
 }
 
 .trend-tooltip {
@@ -1179,6 +1234,7 @@ input::placeholder {
   padding: 0.6rem 0.8rem 0.7rem;
   min-width: 160px;
   z-index: 2;
+  pointer-events: none;
 }
 
 .trend-tooltip-header {
@@ -1260,12 +1316,12 @@ input::placeholder {
 .trend-axis-bottom {
   display: flex;
   justify-content: space-between;
-  font-size: 0.6rem;
+  font-size: 0.55rem;
   color: var(--text-sub);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  padding: 0 0.5rem 0.4rem;
+  padding: 0 0.4rem 0.3rem;
   border-top: var(--border-width) solid var(--border);
 }
 
@@ -1277,77 +1333,10 @@ input::placeholder {
   border: var(--border-width) solid var(--border);
 }
 
-.mini-grid {
-  display: grid;
-  gap: 1rem;
-  padding: 0 1.5rem 1.5rem;
-}
-
-.mini-panel {
-  border: var(--border-width) solid var(--border);
-  border-radius: 12px;
-  padding: 0.8rem;
-  background: rgba(247, 245, 240, 0.4);
-}
-
-.mini-header {
-  display: flex;
-  justify-content: space-between;
-  font-size: 0.6rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-sub);
-  margin-bottom: 0.5rem;
-}
-
-.mini-panel .mini-value {
-  color: var(--text);
-  background: var(--surface);
-  padding: 0.1rem 0.4rem;
-  border-radius: 8px;
-  border: var(--border-width) solid var(--border);
-}
-
-.mini-bars {
-  display: flex;
-  align-items: flex-end;
-  gap: 3px;
-  height: 46px;
-}
-
-.mini-bars span {
-  flex: 1;
-  border-radius: 4px;
-  background: rgba(106, 141, 115, 0.2);
-  transition: background 0.2s ease;
-}
-
-.mini-panel.success .mini-bars span {
-  background: rgba(106, 141, 115, 0.25);
-}
-
-.mini-panel.success:hover .mini-bars span {
-  background: var(--success);
-}
-
-.mini-panel.failure .mini-bars span {
-  background: rgba(194, 94, 94, 0.2);
-}
-
-.mini-panel.failure:hover .mini-bars span {
-  background: var(--danger);
-}
-
-@media (min-width: 768px) {
-  .mini-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
 
 @media (max-width: 768px) {
   .trend-chart {
-    height: 240px;
+    height: 220px;
   }
 
   .trend-header {
@@ -1524,6 +1513,59 @@ input::placeholder {
   box-shadow: var(--shadow-soft);
 }
 
+.filter-panel {
+  border: var(--border-width) solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+  padding: 1rem 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  margin-bottom: 1rem;
+}
+
+.filter-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.filter-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.filter-title .material-symbols-outlined {
+  font-size: 1rem;
+  color: var(--text-sub);
+}
+
+.filter-actions {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.filter-grid {
+  display: grid;
+  gap: 0.9rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.filter-panel .search {
+  width: 100%;
+  min-width: 0;
+}
+
+.filter-panel .select {
+  width: 100%;
+}
+
 .search {
   display: flex;
   align-items: center;
@@ -1600,13 +1642,13 @@ thead {
 
 th,
 td {
-  padding: 0.75rem 0.9rem;
+  padding: 0.6rem 0.8rem;
   text-align: left;
   border-bottom: var(--border-width) solid var(--border-soft);
 }
 
 th {
-  font-size: 0.7rem;
+  font-size: 0.65rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--text-sub);
@@ -1656,11 +1698,38 @@ tbody tr:hover {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 0.75rem 1rem;
-  font-size: 0.75rem;
+  padding: 0.6rem 0.8rem;
+  font-size: 0.7rem;
   color: var(--text-sub);
   background: var(--surface-2);
   border-top: var(--border-width) solid var(--border);
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.page-info {
+  font-size: 0.7rem;
+  color: var(--text-sub);
+  margin-right: 0.25rem;
+}
+
+.page-jump {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.7rem;
+  color: var(--text-sub);
+}
+
+.page-jump input {
+  width: 56px;
+  padding: 0.25rem 0.4rem;
+  font-size: 0.7rem;
+  border-radius: 8px;
 }
 
 .empty-cell {
@@ -1916,12 +1985,20 @@ tbody tr.clickable {
   border-radius: 12px;
   background: var(--surface-2);
   box-shadow: none;
+  min-width: 0;
 }
 
 .meta-card span {
   font-size: 0.65rem;
   text-transform: none;
   color: var(--text-sub);
+}
+
+.meta-card strong {
+  display: block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .error-box {
