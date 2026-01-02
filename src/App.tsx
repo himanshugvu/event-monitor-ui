@@ -212,39 +212,6 @@ const downloadCsv = (filename: string, content: string) => {
   URL.revokeObjectURL(url);
 };
 
-const sortBucketsByTime = (buckets: BucketPoint[]) => {
-  if (buckets.length <= 1) {
-    return buckets;
-  }
-  return [...buckets].sort((left, right) => {
-    const leftTime = parseDate(left.bucketStart)?.getTime() ?? 0;
-    const rightTime = parseDate(right.bucketStart)?.getTime() ?? 0;
-    return leftTime - rightTime;
-  });
-};
-
-const buildDeltaLabel = (
-  buckets: BucketPoint[],
-  getValue: (bucket: BucketPoint) => number,
-  formatter: (value: number) => string
-) => {
-  const sorted = sortBucketsByTime(buckets);
-  if (sorted.length < 2) {
-    return "No recent change";
-  }
-  const current = getValue(sorted[sorted.length - 1]);
-  const previous = getValue(sorted[sorted.length - 2]);
-  if (!Number.isFinite(current) || !Number.isFinite(previous)) {
-    return "No recent change";
-  }
-  const delta = current - previous;
-  if (Math.abs(delta) < 0.0001) {
-    return "No recent change";
-  }
-  const sign = delta > 0 ? "+" : "-";
-  return `${sign}${formatter(Math.abs(delta))} vs prev hour`;
-};
-
 const parseDate = (value?: unknown) => {
   if (!value) {
     return null;
@@ -739,10 +706,6 @@ export default function App() {
               dayMode={dayMode}
               onDayModeChange={setDayMode}
               onDayChange={setDay}
-              onNavigateHome={() => {
-                setScreen("home");
-                setActiveNav("home");
-              }}
               selectedEvent={selectedEvent}
               onSelectEvent={setSelectedEvent}
               eventCatalog={eventCatalog}
@@ -1013,7 +976,6 @@ type EventDetailsScreenProps = {
   dayMode: DayMode;
   onDayModeChange: (value: DayMode) => void;
   onDayChange: (value: string) => void;
-  onNavigateHome: () => void;
   selectedEvent: string;
   onSelectEvent: (value: string) => void;
   eventCatalog: EventCatalogItem[];
@@ -1025,7 +987,6 @@ function EventDetailsScreen({
   dayMode,
   onDayModeChange,
   onDayChange,
-  onNavigateHome,
   selectedEvent,
   onSelectEvent,
   eventCatalog,
@@ -1071,7 +1032,6 @@ function EventDetailsScreen({
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedRow, setSelectedRow] = useState<SuccessRow | FailureRow | null>(null);
   const pageSize = 50;
-  const meta = resolveCatalogEntry(selectedEvent, eventCatalog);
   const eventCatalogMap = useMemo(
     () => new Map(eventCatalog.map((item) => [item.eventKey, item])),
     [eventCatalog]
@@ -1323,14 +1283,6 @@ function EventDetailsScreen({
   const pageInput = tab === "success" ? successPageInput : failurePageInput;
   const setPageInput = tab === "success" ? setSuccessPageInput : setFailurePageInput;
   const bucketPoints = buckets?.buckets ?? [];
-  const successRateTrend = useMemo(
-    () => buildDeltaLabel(bucketPoints, (bucket) => bucket.successRate, formatPercent),
-    [bucketPoints]
-  );
-  const latencyTrend = useMemo(
-    () => buildDeltaLabel(bucketPoints, (bucket) => bucket.avgLatencyMs, formatLatency),
-    [bucketPoints]
-  );
   const updatedText = summaryLoading
     ? "Loading..."
     : summary?.generatedAt
