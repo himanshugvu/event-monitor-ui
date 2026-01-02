@@ -57,6 +57,7 @@ type BucketPoint = {
   successRate: number;
   retriableFailures: number;
   avgLatencyMs: number;
+  failureSources?: string[];
 };
 
 type EventBucketsResponse = {
@@ -155,6 +156,60 @@ const formatLatency = (value?: number) => {
     return "--";
   }
   return `${Math.round(value)}ms`;
+};
+
+const toCsvValue = (value: unknown) => {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  const text = String(value);
+  if (/[",\n]/.test(text)) {
+    return `"${text.replace(/"/g, "\"\"")}"`;
+  }
+  return text;
+};
+
+const buildEventsCsv = (day: string, rows: EventRow[]) => {
+  const header = [
+    "Day",
+    "Event Key",
+    "Event Name",
+    "Category",
+    "Total",
+    "Success",
+    "Failures",
+    "Retriable",
+    "Success Rate",
+    "Avg Latency Ms",
+    "Status",
+  ];
+  const lines = rows.map((row) => [
+    day,
+    row.eventKey,
+    row.name,
+    row.category,
+    row.total,
+    row.success,
+    row.failure,
+    row.retriableFailures,
+    row.successRate,
+    row.avgLatencyMs,
+    statusLabels[row.status] ?? row.status,
+  ]);
+  return [header, ...lines].map((line) => line.map(toCsvValue).join(",")).join("\n");
+};
+
+const downloadCsv = (filename: string, content: string) => {
+  const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
 };
 
 const sortBucketsByTime = (buckets: BucketPoint[]) => {
@@ -269,15 +324,18 @@ const buildQuery = (params: Record<string, string | number | boolean | null | un
   return query ? `?${query}` : "";
 };
 
+const splitDateTimeInput = (value: string) => {
+  if (!value) {
+    return { date: "", time: "" };
+  }
+  const [date, time = ""] = value.split("T");
+  return { date, time };
+};
+
 const resolveSearch = (value: string) => {
   const trimmed = value.trim();
   if (!trimmed) {
     return { traceId: undefined, messageKey: undefined };
-  }
-  const lower = trimmed.toLowerCase();
-  if (lower.startsWith("msg:")) {
-    const messageKey = trimmed.slice(4).trim();
-    return { traceId: undefined, messageKey: messageKey || undefined };
   }
   return { traceId: trimmed, messageKey: undefined };
 };
@@ -325,24 +383,59 @@ const isAbortError = (error: unknown) => {
   return error instanceof Error && error.name === "AbortError";
 };
 
-const getAxisLabels = (buckets: BucketPoint[], labelCount = 7) => {
+const getAxisLabels = (
+  buckets: BucketPoint[],
+  labelCount = 7,
+  intervalMinutes?: number,
+  useBucketEnd?: boolean
+) => {
   if (!buckets.length) {
     return [];
   }
-  const safeCount = Math.max(2, labelCount);
+  const safeCount = Math.max(2, Math.min(labelCount, buckets.length));
   const lastIndex = buckets.length - 1;
-  const positions = Array.from({ length: safeCount }, (_, index) =>
-    Math.round((lastIndex * index) / (safeCount - 1))
-  );
-  return positions.map((index) => {
-    const labelDate = parseDate(buckets[index]?.bucketStart);
+  if (buckets.length <= safeCount) {
+    return buckets.map((bucket) => {
+    const labelDate = parseDate(bucket.bucketStart);
     if (!labelDate) {
       return "--:--";
     }
-    const hours = String(labelDate.getHours()).padStart(2, "0");
-    const minutes = String(labelDate.getMinutes()).padStart(2, "0");
+    const resolved = useBucketEnd && intervalMinutes
+      ? new Date(labelDate.getTime() + intervalMinutes * 60 * 1000)
+      : labelDate;
+    const hours = String(resolved.getHours()).padStart(2, "0");
+    const minutes = String(resolved.getMinutes()).padStart(2, "0");
     return `${hours}:${minutes}`;
   });
+  }
+  const positionSet = new Set<number>();
+  for (let index = 0; index < safeCount; index += 1) {
+    positionSet.add(Math.round((lastIndex * index) / (safeCount - 1)));
+  }
+  return Array.from(positionSet)
+    .sort((left, right) => left - right)
+    .map((index) => {
+      const labelDate = parseDate(buckets[index]?.bucketStart);
+      if (!labelDate) {
+        return "--:--";
+      }
+      const resolved = useBucketEnd && intervalMinutes
+        ? new Date(labelDate.getTime() + intervalMinutes * 60 * 1000)
+        : labelDate;
+      const hours = String(resolved.getHours()).padStart(2, "0");
+      const minutes = String(resolved.getMinutes()).padStart(2, "0");
+      return `${hours}:${minutes}`;
+    });
+};
+
+const formatAxisTime = (value?: unknown) => {
+  const date = parseDate(value);
+  if (!date) {
+    return "--:--";
+  }
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${hours}:${minutes}`;
 };
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
@@ -385,6 +478,23 @@ const buildLinePath = (points: Array<{ x: number; y: number }>) => {
     .join(" ");
 };
 
+const buildLinePathWithGaps = (
+  points: Array<{ x: number; y: number }>,
+  visible: boolean[]
+) => {
+  let path = "";
+  let started = false;
+  points.forEach((point, index) => {
+    if (!visible[index]) {
+      started = false;
+      return;
+    }
+    path += `${started ? "L" : "M"}${point.x} ${point.y} `;
+    started = true;
+  });
+  return path.trim();
+};
+
 const buildAreaPath = (points: Array<{ x: number; y: number }>) => {
   if (!points.length) {
     return "";
@@ -403,6 +513,29 @@ const formatTooltipTime = (value?: unknown) => {
     hour: "numeric",
     minute: "2-digit",
   }).format(date);
+};
+
+const formatTooltipRange = (start?: unknown, intervalMinutes?: number) => {
+  const startDate = parseDate(start);
+  if (!startDate) {
+    return "--:--";
+  }
+  if (!intervalMinutes || intervalMinutes <= 0) {
+    return formatTooltipTime(startDate);
+  }
+  const endDate = new Date(startDate.getTime() + intervalMinutes * 60 * 1000);
+  return `${formatTooltipTime(startDate)} - ${formatTooltipTime(endDate)}`;
+};
+
+const formatSourceList = (sources: string[], max = 2) => {
+  if (!sources.length) {
+    return "--";
+  }
+  const unique = Array.from(new Set(sources));
+  if (unique.length <= max) {
+    return unique.join(", ");
+  }
+  return `${unique.slice(0, max).join(", ")} +${unique.length - max}`;
 };
 
 async function fetchJson<T>(path: string, signal?: AbortSignal): Promise<T> {
@@ -426,14 +559,15 @@ export default function App() {
   const [theme, setTheme] = useState<ThemeMode>(getInitialTheme);
   const [screen, setScreen] = useState<ScreenMode>("home");
   const [activeNav, setActiveNav] = useState("home");
+  const [eventHeaderControls, setEventHeaderControls] = useState<React.ReactNode>(null);
   const [dayMode, setDayMode] = useState<DayMode>("today");
   const [day, setDay] = useState(() => toLocalDayString(new Date()));
   const [eventCatalog, setEventCatalog] = useState<EventCatalogItem[]>([]);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<string>("");
   const activeMeta = resolveCatalogEntry(selectedEvent, eventCatalog);
-  const headerTitle = screen === "home" ? "Home - Global Aggregation" : `Event Details - ${activeMeta.name}`;
-  const headerSub = screen === "home" ? "Dashboard" : "Events Log";
+  const headerTitle = screen === "home" ? "Global Event Aggregation" : activeMeta.name;
+  const headerSub = screen === "home" ? "" : "Events Log";
   const navItems = [
     { id: "home", label: "Global Aggregation", icon: "dashboard", screen: "home" as ScreenMode },
     { id: "event", label: "Events Log", icon: "list", screen: "event" as ScreenMode },
@@ -473,6 +607,34 @@ export default function App() {
       setDay(toLocalDayString(new Date(Date.now() - 24 * 60 * 60 * 1000)));
     }
   }, [dayMode]);
+
+  const homeHeaderControls =
+    screen === "home" ? (
+      <div className="control-row header-control-row">
+        <div className="day-toggle">
+          <span className="day-label">Day:</span>
+          <div className="segmented">
+            <button
+              className={dayMode === "today" ? "segment active" : "segment"}
+              onClick={() => setDayMode("today")}
+              type="button"
+            >
+              Today
+            </button>
+            <button
+              className={dayMode === "yesterday" ? "segment active" : "segment"}
+              onClick={() => setDayMode("yesterday")}
+              type="button"
+            >
+              Yesterday
+            </button>
+          </div>
+          <DateField day={day} onDayChange={setDay} onDayModeChange={setDayMode} />
+        </div>
+      </div>
+    ) : null;
+
+  const headerControlsNode = screen === "event" ? eventHeaderControls : homeHeaderControls;
 
   return (
     <div className="layout auto-sidebar">
@@ -517,20 +679,38 @@ export default function App() {
         </div>
       </aside>
       <main className="main">
-        <header className="top-header">
+        <header className={screen === "event" ? "top-header event-header" : "top-header"}>
           <div className="header-left">
-            <h1>{headerTitle}</h1>
-            <span className="header-sep">/</span>
-            <span className="header-sub">{headerSub}</span>
+            <div className="header-title">
+              {screen === "event" ? (
+                <div className="header-breadcrumbs">
+                  <button
+                    className="header-link"
+                    type="button"
+                    onClick={() => {
+                      setScreen("home");
+                      setActiveNav("home");
+                    }}
+                  >
+                    Dashboard
+                  </button>
+                  <span>/</span>
+                  <span>{headerTitle}</span>
+                </div>
+              ) : (
+                <h1>{headerTitle}</h1>
+              )}
+              {screen === "event" && <span className="badge header-badge">Live View</span>}
+            </div>
+            {screen !== "event" && headerSub && (
+              <>
+                <span className="header-sep">/</span>
+                <span className="header-sub">{headerSub}</span>
+              </>
+            )}
           </div>
+          {headerControlsNode ? <div className="header-controls">{headerControlsNode}</div> : null}
           <div className="header-actions">
-            <button className="icon-button" aria-label="Search">
-              <span className="material-symbols-outlined">search</span>
-            </button>
-            <button className="icon-button notify" aria-label="Notifications">
-              <span className="material-symbols-outlined">notifications</span>
-              <span className="notify-dot" />
-            </button>
             <button
               className="icon-button"
               aria-label="Toggle theme"
@@ -566,6 +746,7 @@ export default function App() {
               selectedEvent={selectedEvent}
               onSelectEvent={setSelectedEvent}
               eventCatalog={eventCatalog}
+              onHeaderControls={setEventHeaderControls}
             />
           )}
         </div>
@@ -614,6 +795,7 @@ function HomeScreen({ day, onOpenEvent }: HomeScreenProps) {
       return;
     }
     const eventKeys = home.events.map((event) => event.eventKey);
+    const eventNameMap = new Map(home.events.map((event) => [event.eventKey, event.eventName]));
     if (!eventKeys.length) {
       setHomeBuckets([]);
       return;
@@ -646,7 +828,8 @@ function HomeScreen({ day, onOpenEvent }: HomeScreenProps) {
           let retriable = 0;
           let weightedLatency = 0;
           let weightedSuccess = 0;
-          responses.forEach((response) => {
+          const failureSources: string[] = [];
+          responses.forEach((response, responseIndex) => {
             const bucket = response.buckets[i];
             if (!bucket) {
               return;
@@ -657,6 +840,10 @@ function HomeScreen({ day, onOpenEvent }: HomeScreenProps) {
             retriable += bucket.retriableFailures;
             weightedLatency += bucket.avgLatencyMs * bucket.success;
             weightedSuccess += bucket.success;
+            if (bucket.failure > 0) {
+              const key = eventKeys[responseIndex];
+              failureSources.push(eventNameMap.get(key) || key || "Unknown");
+            }
           });
           const avgLatencyMs = weightedSuccess > 0 ? weightedLatency / weightedSuccess : 0;
           const successRate = total > 0 ? (success * 100) / total : 0;
@@ -668,6 +855,7 @@ function HomeScreen({ day, onOpenEvent }: HomeScreenProps) {
             successRate: Math.round(successRate * 100) / 100,
             retriableFailures: retriable,
             avgLatencyMs: Math.round(avgLatencyMs * 100) / 100,
+            failureSources: failureSources.length ? failureSources : undefined,
           });
         }
         setHomeBuckets(aggregated);
@@ -700,31 +888,16 @@ function HomeScreen({ day, onOpenEvent }: HomeScreenProps) {
       };
     });
   }, [home]);
-
-  const failureInsights = useMemo(() => {
-    if (!home) {
-      return [];
+  const canExport = eventRows.length > 0;
+  const handleExport = useCallback(() => {
+    if (!eventRows.length) {
+      return;
     }
-    return [...home.events]
-      .filter((event) => event.failure > 0)
-      .sort((a, b) => b.failure - a.failure)
-      .slice(0, 3)
-      .map((event) => {
-        const name = event.eventName?.trim() ? event.eventName : event.eventKey;
-        return {
-          tone: getStatusTone(event.successRate),
-          title: `${name} failure spike`,
-          detail: `${formatNumber(event.failure)} failures, ${formatNumber(
-            event.retriableFailures
-          )} retriable`,
-          rate: event.successRate,
-        };
-      });
-  }, [home]);
+    const csv = buildEventsCsv(day, eventRows);
+    downloadCsv(`all-events-${day}.csv`, csv);
+  }, [day, eventRows]);
 
   const chartBuckets = homeBuckets ?? [];
-  const primaryEventKey = eventRows[0]?.eventKey ?? "";
-  const canOpenInsights = primaryEventKey.length > 0;
 
   return (
     <section className="home">
@@ -768,86 +941,67 @@ function HomeScreen({ day, onOpenEvent }: HomeScreenProps) {
         buckets={chartBuckets}
         loading={homeBucketsLoading || homeLoading}
         error={homeBucketsError}
+        intervalMinutes={60}
       />
 
-      <div className="home-grid">
-        <div className="card table-card">
-          <div className="card-header">
-            <h3>All Events Breakdown</h3>
-            <button className="link-button" type="button">
-              Export
-              <span className="material-symbols-outlined">download</span>
-            </button>
-          </div>
-          <div className="table-wrap">
-            <table>
-              <thead>
+      <div className="card table-card">
+        <div className="card-header">
+          <h3>All Events Breakdown</h3>
+          <button
+            className="link-button"
+            type="button"
+            onClick={handleExport}
+            disabled={!canExport}
+            title={canExport ? "Export CSV" : "No data to export"}
+          >
+            Export
+            <span className="material-symbols-outlined">download</span>
+          </button>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Event</th>
+                <th>Total</th>
+                <th>Success</th>
+                <th>Failures</th>
+                <th>Retriable</th>
+                <th>Success Rate</th>
+                <th>Avg Latency</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {eventRows.length === 0 ? (
                 <tr>
-                  <th>Event</th>
-                  <th>Volume</th>
-                  <th>Success Rate</th>
-                  <th>Latency</th>
-                  <th>Status</th>
+                  <td colSpan={8} className="empty-cell">
+                    No events available for this day.
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {eventRows.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="empty-cell">
-                      No events available for this day.
+              ) : (
+                eventRows.map((event) => (
+                  <tr key={event.eventKey} className="clickable" onClick={() => onOpenEvent(event.eventKey)}>
+                    <td>
+                      <div className="cell-title">{event.name}</div>
+                      <div className="cell-sub">{event.category}</div>
+                    </td>
+                    <td className="mono">{formatNumber(event.total)}</td>
+                    <td className="mono">{formatNumber(event.success)}</td>
+                    <td className={event.failure > 0 ? "mono danger" : "mono"}>
+                      {formatNumber(event.failure)}
+                    </td>
+                    <td className="mono">{formatNumber(event.retriableFailures)}</td>
+                    <td className="mono">{formatPercent(event.successRate)}</td>
+                    <td className="mono">{formatLatency(event.avgLatencyMs)}</td>
+                    <td>
+                      <StatusBadge tone={event.status} />
                     </td>
                   </tr>
-                ) : (
-                  eventRows.map((event) => (
-                    <tr key={event.eventKey} className="clickable" onClick={() => onOpenEvent(event.eventKey)}>
-                      <td>
-                        <div className="cell-title">{event.name}</div>
-                        <div className="cell-sub">{event.category}</div>
-                      </td>
-                      <td className="mono">{formatNumber(event.total)}</td>
-                      <td className="mono">{formatPercent(event.successRate)}</td>
-                      <td className="mono">{formatLatency(event.avgLatencyMs)}</td>
-                      <td>
-                        <StatusBadge tone={event.status} />
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div className="card insights-card">
-          <div className="card-header danger">
-            <h3>
-              <span className="material-symbols-outlined">analytics</span>
-              Failure Insights
-            </h3>
-          </div>
-          <div className="insights-body">
-            {failureInsights.length === 0 ? (
-              <div className="empty-state">No failures detected yet.</div>
-            ) : (
-              failureInsights.map((insight) => (
-                <div key={insight.title} className="insight-item">
-                  <span className="material-symbols-outlined">warning</span>
-                  <div>
-                    <div className="insight-title">{insight.title}</div>
-                    <p>{insight.detail}</p>
-                  </div>
-                </div>
-              ))
-            )}
-            <button
-              className="button ghost small"
-              onClick={() => onOpenEvent(primaryEventKey)}
-              type="button"
-              disabled={!canOpenInsights}
-            >
-              View All Insights
-            </button>
-          </div>
+                ))
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
     </section>
@@ -863,6 +1017,7 @@ type EventDetailsScreenProps = {
   selectedEvent: string;
   onSelectEvent: (value: string) => void;
   eventCatalog: EventCatalogItem[];
+  onHeaderControls?: (node: React.ReactNode) => void;
 };
 
 function EventDetailsScreen({
@@ -874,6 +1029,7 @@ function EventDetailsScreen({
   selectedEvent,
   onSelectEvent,
   eventCatalog,
+  onHeaderControls,
 }: EventDetailsScreenProps) {
   const [summary, setSummary] = useState<EventSummaryResponse | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
@@ -882,15 +1038,22 @@ function EventDetailsScreen({
   const [bucketsLoading, setBucketsLoading] = useState(false);
   const [bucketsError, setBucketsError] = useState<string | null>(null);
   const [refreshIndex, setRefreshIndex] = useState(0);
-  const [bucketInterval, setBucketInterval] = useState(60);
+  const bucketInterval = 60;
   const [tab, setTab] = useState<"success" | "failures">("failures");
   const [searchTerm, setSearchTerm] = useState("");
-  const [searchField, setSearchField] = useState<"trace" | "message">("trace");
+  const [searchField, setSearchField] = useState<
+    "trace" | "account" | "exception" | "retriable"
+  >("trace");
   const [searchValue, setSearchValue] = useState("");
   const [accountNumber, setAccountNumber] = useState("");
-  const [accountInput, setAccountInput] = useState("");
+  const [fromDateTime, setFromDateTime] = useState("");
+  const [toDateTime, setToDateTime] = useState("");
+  const [fromDateTimeInput, setFromDateTimeInput] = useState("");
+  const [toDateTimeInput, setToDateTimeInput] = useState("");
   const [exceptionType, setExceptionType] = useState("");
-  const [exceptionInput, setExceptionInput] = useState("");
+  const [exceptionOptions, setExceptionOptions] = useState<string[]>([]);
+  const [exceptionOptionsLoading, setExceptionOptionsLoading] = useState(false);
+  const [exceptionOptionsError, setExceptionOptionsError] = useState<string | null>(null);
   const [retriable, setRetriable] = useState<"all" | "true" | "false">("all");
   const [retriableInput, setRetriableInput] = useState<"all" | "true" | "false">("all");
   const [successPage, setSuccessPage] = useState(0);
@@ -978,6 +1141,41 @@ function EventDetailsScreen({
   }, [day, selectedEvent, bucketInterval, refreshIndex]);
 
   useEffect(() => {
+    if (searchField !== "exception" || !selectedEvent) {
+      return;
+    }
+    const controller = new AbortController();
+    setExceptionOptionsLoading(true);
+    setExceptionOptionsError(null);
+    const { date: fromDate, time: fromTime } = splitDateTimeInput(fromDateTime);
+    const { date: toDate, time: toTime } = splitDateTimeInput(toDateTime);
+    const query = buildQuery({
+      fromDate,
+      toDate,
+      fromTime,
+      toTime,
+    });
+    fetchJson<string[]>(
+      `/api/v1/days/${day}/events/${selectedEvent}/exception-types${query}`,
+      controller.signal
+    )
+      .then((data) => {
+        setExceptionOptions((data ?? []).filter(Boolean));
+      })
+      .catch((error) => {
+        if (!isAbortError(error)) {
+          setExceptionOptionsError(error instanceof Error ? error.message : String(error));
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setExceptionOptionsLoading(false);
+        }
+      });
+    return () => controller.abort();
+  }, [day, fromDateTime, toDateTime, searchField, selectedEvent]);
+
+  useEffect(() => {
     if (!selectedEvent) {
       return;
     }
@@ -986,9 +1184,7 @@ function EventDetailsScreen({
     setSearchField("trace");
     setSearchValue("");
     setAccountNumber("");
-    setAccountInput("");
     setExceptionType("");
-    setExceptionInput("");
     setRetriable("all");
     setRetriableInput("all");
     setSuccessPage(0);
@@ -1004,6 +1200,17 @@ function EventDetailsScreen({
   }, [summary?.kpis.failure, tab]);
 
   useEffect(() => {
+    if (tab !== "success") {
+      return;
+    }
+    if (searchField === "exception" || searchField === "retriable") {
+      setSearchField("trace");
+      setSearchValue(searchTerm);
+      setRetriableInput("all");
+    }
+  }, [searchField, searchTerm, tab]);
+
+  useEffect(() => {
     if (tab !== "success" || !selectedEvent) {
       return;
     }
@@ -1012,12 +1219,18 @@ function EventDetailsScreen({
     setSuccessError(null);
     setSuccessTotal(0);
     const { traceId, messageKey } = resolveSearch(searchTerm);
+    const { date: fromDate, time: fromTime } = splitDateTimeInput(fromDateTime);
+    const { date: toDate, time: toTime } = splitDateTimeInput(toDateTime);
     const query = buildQuery({
       page: successPage,
       size: pageSize,
       traceId,
       messageKey,
       accountNumber: accountNumber.trim(),
+      fromDate,
+      toDate,
+      fromTime,
+      toTime,
     });
     fetchJson<PagedRowsResponse<SuccessRow>>(
       `/api/v1/days/${day}/events/${selectedEvent}/success${query}`,
@@ -1038,7 +1251,7 @@ function EventDetailsScreen({
         }
       });
     return () => controller.abort();
-  }, [tab, day, selectedEvent, successPage, searchTerm, accountNumber]);
+  }, [tab, day, selectedEvent, successPage, searchTerm, accountNumber, fromDateTime, toDateTime]);
 
   useEffect(() => {
     if (tab !== "failures" || !selectedEvent) {
@@ -1049,6 +1262,8 @@ function EventDetailsScreen({
     setFailureError(null);
     setFailureTotal(0);
     const { traceId, messageKey } = resolveSearch(searchTerm);
+    const { date: fromDate, time: fromTime } = splitDateTimeInput(fromDateTime);
+    const { date: toDate, time: toTime } = splitDateTimeInput(toDateTime);
     const query = buildQuery({
       page: failurePage,
       size: pageSize,
@@ -1058,6 +1273,10 @@ function EventDetailsScreen({
       exceptionType: exceptionType.trim(),
       retriable:
         retriable === "all" ? undefined : retriable === "true" ? true : retriable === "false" ? false : undefined,
+      fromDate,
+      toDate,
+      fromTime,
+      toTime,
     });
     fetchJson<PagedRowsResponse<FailureRow>>(
       `/api/v1/days/${day}/events/${selectedEvent}/failures${query}`,
@@ -1078,7 +1297,18 @@ function EventDetailsScreen({
         }
       });
     return () => controller.abort();
-  }, [tab, day, selectedEvent, failurePage, searchTerm, accountNumber, exceptionType, retriable]);
+  }, [
+    tab,
+    day,
+    selectedEvent,
+    failurePage,
+    searchTerm,
+    accountNumber,
+    exceptionType,
+    retriable,
+    fromDateTime,
+    toDateTime,
+  ]);
 
   const rows = tab === "success" ? successRows : failureRows;
   const rowsLoading = tab === "success" ? successLoading : failureLoading;
@@ -1106,15 +1336,35 @@ function EventDetailsScreen({
     : summary?.generatedAt
     ? `Updated ${formatTimeAgo(summary.generatedAt)}`
     : "Not loaded";
+  const searchValuePlaceholder =
+    searchField === "exception"
+      ? "Exception type"
+      : searchField === "account"
+      ? "Account number"
+      : "Enter value";
+  const exceptionSelectLabel = exceptionOptionsLoading
+    ? "Loading..."
+    : exceptionOptionsError
+    ? "Failed to load"
+    : "All exceptions";
 
   const applyFilters = () => {
     const trimmedSearch = searchValue.trim();
-    const nextSearch =
-      searchField === "message" && trimmedSearch ? `msg:${trimmedSearch}` : trimmedSearch;
-    setSearchTerm(nextSearch);
-    setAccountNumber(accountInput.trim());
-    setExceptionType(exceptionInput.trim());
-    setRetriable(retriableInput);
+    setSearchTerm("");
+    setAccountNumber("");
+    setExceptionType("");
+    setRetriable("all");
+    if (searchField === "trace") {
+      setSearchTerm(trimmedSearch);
+    } else if (searchField === "account") {
+      setAccountNumber(trimmedSearch);
+    } else if (searchField === "exception") {
+      setExceptionType(trimmedSearch);
+    } else if (searchField === "retriable") {
+      setRetriable(retriableInput === "all" ? "true" : retriableInput);
+    }
+    setFromDateTime(fromDateTimeInput);
+    setToDateTime(toDateTimeInput);
     setSuccessPage(0);
     setFailurePage(0);
   };
@@ -1122,13 +1372,15 @@ function EventDetailsScreen({
   const clearFilters = () => {
     setSearchField("trace");
     setSearchValue("");
-    setAccountInput("");
-    setExceptionInput("");
-    setRetriableInput("all");
     setSearchTerm("");
     setAccountNumber("");
     setExceptionType("");
     setRetriable("all");
+    setRetriableInput("all");
+    setFromDateTime("");
+    setToDateTime("");
+    setFromDateTimeInput("");
+    setToDateTimeInput("");
     setSuccessPage(0);
     setFailurePage(0);
   };
@@ -1164,76 +1416,68 @@ function EventDetailsScreen({
     setFailurePageInput(String(failurePage + 1));
   }, [failurePage]);
 
-  return (
-    <section className="page">
-      <div className="page-header">
-        <div>
-          <div className="breadcrumbs">
-            <button className="breadcrumb-link" type="button" onClick={onNavigateHome}>
-              Dashboard
+  const handleRefresh = useCallback(() => setRefreshIndex((value) => value + 1), []);
+
+  const headerControls = useMemo(
+    () => (
+      <div className="control-row header-control-row">
+        <div className="day-toggle">
+          <span className="day-label">Day:</span>
+          <div className="segmented">
+            <button
+              className={dayMode === "today" ? "segment active" : "segment"}
+              onClick={() => onDayModeChange("today")}
+              type="button"
+            >
+              Today
             </button>
-            <span>/</span>
-            <span>Event Monitor</span>
-            <span>/</span>
-            <strong>{meta.name}</strong>
+            <button
+              className={dayMode === "yesterday" ? "segment active" : "segment"}
+              onClick={() => onDayModeChange("yesterday")}
+              type="button"
+            >
+              Yesterday
+            </button>
           </div>
-          <div className="title-row">
-            <h1>{meta.name}</h1>
-            <span className="badge">Live View</span>
-          </div>
-          <p className="subtitle">
-            Last updated: <strong>{summary?.generatedAt ? formatDateTime(summary.generatedAt) : "--"}</strong>
-          </p>
+          <DateField day={day} onDayChange={onDayChange} onDayModeChange={onDayModeChange} />
         </div>
-        <div className="control-row">
-          <div className="day-toggle">
-            <span className="day-label">Day:</span>
-            <div className="segmented">
-              <button
-                className={dayMode === "today" ? "segment active" : "segment"}
-                onClick={() => onDayModeChange("today")}
-                type="button"
-              >
-                Today
-              </button>
-              <button
-                className={dayMode === "yesterday" ? "segment active" : "segment"}
-                onClick={() => onDayModeChange("yesterday")}
-                type="button"
-              >
-                Yesterday
-              </button>
-            </div>
-            <DateField day={day} onDayChange={onDayChange} onDayModeChange={onDayModeChange} />
-          </div>
-          <div className="select">
-            <span className="material-symbols-outlined">filter_list</span>
-            <select value={selectedEvent} onChange={(event) => onSelectEvent(event.target.value)}>
-              {eventOptions.map((eventKey) => {
-                const optionMeta = eventCatalogMap.get(eventKey);
-                const label = optionMeta?.name?.trim() ? optionMeta.name : eventKey;
-                return (
-                  <option key={eventKey} value={eventKey}>
-                    {label}
-                  </option>
-                );
-              })}
-            </select>
-          </div>
-          <div className="select">
-            <span className="material-symbols-outlined">schedule</span>
-            <select value={bucketInterval} onChange={(event) => setBucketInterval(Number(event.target.value))}>
-              <option value={60}>Last 24 hours (hourly)</option>
-              <option value={15}>Last 24 hours (15 min)</option>
-            </select>
-          </div>
-          <span className="updated-inline">{updatedText}</span>
-          <button className="button primary" onClick={() => setRefreshIndex((value) => value + 1)}>
+        <div className="select">
+          <span className="material-symbols-outlined">filter_list</span>
+          <select value={selectedEvent} onChange={(event) => onSelectEvent(event.target.value)}>
+            {eventOptions.map((eventKey) => {
+              const optionMeta = eventCatalogMap.get(eventKey);
+              const label = optionMeta?.name?.trim() ? optionMeta.name : eventKey;
+              return (
+                <option key={eventKey} value={eventKey}>
+                  {label}
+                </option>
+              );
+            })}
+          </select>
+        </div>
+        <div className="refresh-stack">
+          <button className="button primary" onClick={handleRefresh}>
             <span className="material-symbols-outlined">refresh</span>
             Refresh
           </button>
+          <span className="updated-inline">{updatedText}</span>
         </div>
       </div>
+    ),
+    [day, dayMode, eventCatalogMap, eventOptions, handleRefresh, onDayChange, onDayModeChange, onSelectEvent, selectedEvent, updatedText]
+  );
+
+  useEffect(() => {
+    if (!onHeaderControls) {
+      return;
+    }
+    onHeaderControls(headerControls);
+    return () => onHeaderControls(null);
+  }, [headerControls, onHeaderControls]);
+
+  return (
+    <section className="page page-compact">
+      {!onHeaderControls && <div className="page-header compact-controls">{headerControls}</div>}
 
       {summaryError && <div className="banner error">Failed to load summary: {summaryError}</div>}
 
@@ -1275,6 +1519,7 @@ function EventDetailsScreen({
         buckets={bucketPoints}
         loading={bucketsLoading}
         error={bucketsError}
+        intervalMinutes={buckets?.intervalMinutes ?? bucketInterval}
       />
 
       <div className="grid-2 detail-layout">
@@ -1290,20 +1535,6 @@ function EventDetailsScreen({
           </div>
 
           <div className="filter-panel">
-            <div className="filter-header">
-              <div className="filter-title">
-                <span className="material-symbols-outlined">tune</span>
-                Filter Events
-              </div>
-              <div className="filter-actions">
-                <button className="button ghost small" onClick={clearFilters} type="button">
-                  Clear
-                </button>
-                <button className="button primary small" onClick={applyFilters} type="button">
-                  Apply
-                </button>
-              </div>
-            </div>
             <div className="filter-grid">
               <div className="field">
                 <label>Search by</label>
@@ -1311,74 +1542,113 @@ function EventDetailsScreen({
                   <span className="material-symbols-outlined">filter_list</span>
                   <select
                     value={searchField}
-                    onChange={(event) =>
-                      setSearchField(event.target.value as "trace" | "message")
-                    }
+                    onChange={(event) => {
+                      const value = event.target.value as
+                        | "trace"
+                        | "account"
+                        | "exception"
+                        | "retriable";
+                      setSearchField(value);
+                      if (value === "account") {
+                        setSearchValue(accountNumber);
+                      } else if (value === "exception") {
+                        setSearchValue(exceptionType);
+                      } else if (value === "trace") {
+                        setSearchValue(searchTerm);
+                      } else if (value === "retriable") {
+                        if (retriableInput === "all") {
+                          setRetriableInput("true");
+                        }
+                        setSearchValue("");
+                      }
+                    }}
                   >
                     <option value="trace">Correlation ID</option>
-                    <option value="message">Message Key</option>
+                    <option value="account">Account Number</option>
+                    {tab === "failures" ? <option value="exception">Exception Type</option> : null}
+                    {tab === "failures" ? <option value="retriable">Retriable</option> : null}
                   </select>
                 </div>
               </div>
               <div className="field">
                 <label>Value</label>
-                <div className="search">
-                  <span className="material-symbols-outlined">search</span>
-                  <input
-                    placeholder="Enter value"
-                    value={searchValue}
-                    onChange={(event) => setSearchValue(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        applyFilters();
-                      }
-                    }}
-                  />
-                </div>
-              </div>
-              <div className="field">
-                <label>Account Number</label>
-                <input
-                  placeholder="Account number"
-                  value={accountInput}
-                  onChange={(event) => setAccountInput(event.target.value)}
-                />
-              </div>
-              {tab === "failures" ? (
-                <>
-                  <div className="field">
-                    <label>Exception</label>
-                    <input
-                      placeholder="Exception type"
-                      value={exceptionInput}
-                      onChange={(event) => setExceptionInput(event.target.value)}
-                    />
-                  </div>
-                  <div className="field">
-                    <label>Retriable</label>
+                {searchField === "retriable" ? (
+                  <div className="select">
+                    <span className="material-symbols-outlined">fact_check</span>
                     <select
-                      value={retriableInput}
+                      value={retriableInput === "all" ? "true" : retriableInput}
                       onChange={(event) =>
-                        setRetriableInput(event.target.value as "all" | "true" | "false")
+                        setRetriableInput(event.target.value as "true" | "false")
                       }
                     >
-                      <option value="all">All</option>
                       <option value="true">Yes</option>
                       <option value="false">No</option>
                     </select>
                   </div>
-                </>
-              ) : (
-                <div className="field">
-                  <label>Status</label>
+                ) : searchField === "exception" ? (
                   <div className="select">
-                    <span className="material-symbols-outlined">task_alt</span>
-                    <select value="success" disabled>
-                      <option value="success">Success</option>
+                    <span className="material-symbols-outlined">error</span>
+                    <select
+                      value={searchValue}
+                      onChange={(event) => setSearchValue(event.target.value)}
+                      disabled={exceptionOptionsLoading}
+                    >
+                      <option value="">{exceptionSelectLabel}</option>
+                      {exceptionOptions.map((option) => (
+                        <option key={option} value={option}>
+                          {option}
+                        </option>
+                      ))}
                     </select>
                   </div>
+                ) : (
+                  <div className="search">
+                    <span className="material-symbols-outlined">search</span>
+                    <input
+                      placeholder={searchValuePlaceholder}
+                      value={searchValue}
+                      onChange={(event) => setSearchValue(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          applyFilters();
+                        }
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+              <div className="field">
+                <label>From</label>
+                <div className="datetime-group">
+                  <input
+                    className="datetime-input"
+                    type="datetime-local"
+                    value={fromDateTimeInput}
+                    onChange={(event) => setFromDateTimeInput(event.target.value)}
+                    step="60"
+                  />
                 </div>
-              )}
+              </div>
+              <div className="field">
+                <label>To</label>
+                <div className="datetime-group">
+                  <input
+                    className="datetime-input"
+                    type="datetime-local"
+                    value={toDateTimeInput}
+                    onChange={(event) => setToDateTimeInput(event.target.value)}
+                    step="60"
+                  />
+                </div>
+              </div>
+              <div className="filter-actions inline-actions">
+                <button className="button ghost small" onClick={clearFilters} type="button">
+                  Clear
+                </button>
+                <button className="button primary small" onClick={applyFilters} type="button">
+                  Apply
+                </button>
+              </div>
             </div>
           </div>
 
@@ -1693,15 +1963,21 @@ function HourlyTrendsPanel({
   buckets,
   loading,
   error,
+  intervalSelect,
+  intervalMinutes,
 }: {
   title: string;
   subtitle: string;
   buckets: BucketPoint[];
   loading?: boolean;
   error?: string | null;
+  intervalSelect?: ReactNode;
+  intervalMinutes?: number;
 }) {
   const rangeOptions = [1, 6, 12, 24];
   const [rangeHours, setRangeHours] = useState(24);
+  const [smoothLines, setSmoothLines] = useState(true);
+  const [bridgeGaps, setBridgeGaps] = useState(false);
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const linesRef = useRef<HTMLDivElement | null>(null);
   const sortedBuckets = useMemo(() => {
@@ -1714,26 +1990,110 @@ function HourlyTrendsPanel({
       return leftTime - rightTime;
     });
   }, [buckets]);
+  const inferredIntervalMs = useMemo(() => {
+    if (sortedBuckets.length < 2) {
+      return 60 * 60 * 1000;
+    }
+    const lastTime = parseDate(sortedBuckets[sortedBuckets.length - 1]?.bucketStart)?.getTime();
+    const prevTime = parseDate(sortedBuckets[sortedBuckets.length - 2]?.bucketStart)?.getTime();
+    if (!lastTime || !prevTime) {
+      return 60 * 60 * 1000;
+    }
+    return Math.max(1, lastTime - prevTime);
+  }, [sortedBuckets]);
+  const bucketIntervalMinutes = useMemo(() => {
+    if (intervalMinutes && intervalMinutes > 0) {
+      return intervalMinutes;
+    }
+    return Math.max(1, Math.round(inferredIntervalMs / 60000));
+  }, [inferredIntervalMs, intervalMinutes]);
+  const bucketIntervalMs = bucketIntervalMinutes * 60 * 1000;
+  const isToday = useMemo(() => {
+    if (!sortedBuckets.length) {
+      return false;
+    }
+    const first = parseDate(sortedBuckets[0]?.bucketStart);
+    if (!first) {
+      return false;
+    }
+    const now = new Date();
+    return (
+      first.getFullYear() === now.getFullYear() &&
+      first.getMonth() === now.getMonth() &&
+      first.getDate() === now.getDate()
+    );
+  }, [sortedBuckets]);
+  const rangeEndTime = useMemo(() => {
+    if (!sortedBuckets.length) {
+      return null;
+    }
+    const first = parseDate(sortedBuckets[0]?.bucketStart);
+    const last = parseDate(sortedBuckets[sortedBuckets.length - 1]?.bucketStart);
+    if (!first || !last) {
+      return null;
+    }
+    const now = new Date();
+    if (!isToday) {
+      return last.getTime() + bucketIntervalMs;
+    }
+    return now.getTime();
+  }, [bucketIntervalMs, isToday, sortedBuckets]);
   const displayBuckets = useMemo(() => {
-    if (!sortedBuckets.length || rangeHours >= 24) {
+    if (!sortedBuckets.length) {
       return sortedBuckets;
     }
-    const latestTime = parseDate(sortedBuckets[sortedBuckets.length - 1]?.bucketStart)?.getTime();
-    if (!latestTime) {
+    const endExclusive = rangeEndTime ?? (isToday ? Date.now() : null);
+    if (rangeHours >= 24) {
+      if (!isToday || !endExclusive) {
+        return sortedBuckets;
+      }
+      const filtered = sortedBuckets.filter((bucket) => {
+        const time = parseDate(bucket.bucketStart)?.getTime();
+        return typeof time === "number" && !Number.isNaN(time) && time < endExclusive;
+      });
+      if (filtered.length >= 2) {
+        return filtered;
+      }
+      return sortedBuckets.slice(-Math.min(2, sortedBuckets.length));
+    }
+    if (!endExclusive) {
       return sortedBuckets;
     }
-    const cutoff = latestTime - rangeHours * 60 * 60 * 1000;
+    const cutoff = endExclusive - rangeHours * 60 * 60 * 1000;
     const filtered = sortedBuckets.filter((bucket) => {
       const time = parseDate(bucket.bucketStart)?.getTime();
-      return typeof time === "number" && !Number.isNaN(time) && time >= cutoff;
+      return (
+        typeof time === "number" &&
+        !Number.isNaN(time) &&
+        time >= cutoff &&
+        time < endExclusive
+      );
     });
+    if (rangeHours === 1 && filtered.length >= 1) {
+      return filtered;
+    }
     if (filtered.length >= 2) {
       return filtered;
     }
     return sortedBuckets.slice(-Math.min(2, sortedBuckets.length));
-  }, [sortedBuckets, rangeHours]);
+  }, [bucketIntervalMs, isToday, rangeEndTime, rangeHours, sortedBuckets]);
   const hasData = displayBuckets.length > 0;
-  const axisLabels = useMemo(() => getAxisLabels(displayBuckets, 7), [displayBuckets]);
+  const axisLabels = useMemo(() => {
+    if (rangeHours === 1) {
+      const labels = displayBuckets.map((bucket) => formatAxisTime(bucket.bucketStart));
+      if (displayBuckets.length) {
+        const lastStart = parseDate(displayBuckets[displayBuckets.length - 1]?.bucketStart);
+        const endLabel = lastStart
+          ? formatAxisTime(new Date(lastStart.getTime() + bucketIntervalMinutes * 60 * 1000))
+          : null;
+        if (endLabel) {
+          labels.push(endLabel);
+        }
+      }
+      return labels;
+    }
+    return getAxisLabels(displayBuckets, 7, bucketIntervalMinutes, false);
+  }, [bucketIntervalMinutes, displayBuckets, rangeHours]);
   const rawLatencyValues = useMemo(
     () => displayBuckets.map((bucket) => bucket.avgLatencyMs ?? 0),
     [displayBuckets]
@@ -1751,22 +2111,27 @@ function HourlyTrendsPanel({
     });
   }, [displayBuckets]);
   const smoothLatencyValues = useMemo(
-    () => smoothSeries(rawLatencyValues, 3),
-    [rawLatencyValues]
+    () => (smoothLines ? smoothSeries(rawLatencyValues, 3) : rawLatencyValues),
+    [rawLatencyValues, smoothLines]
   );
   const smoothSuccessRates = useMemo(
-    () => smoothSeries(rawSuccessRates, 3),
-    [rawSuccessRates]
+    () => (smoothLines ? smoothSeries(rawSuccessRates, 3) : rawSuccessRates),
+    [rawSuccessRates, smoothLines]
   );
   const smoothFailureRates = useMemo(
-    () => smoothSeries(rawFailureRates, 3),
-    [rawFailureRates]
+    () => (smoothLines ? smoothSeries(rawFailureRates, 3) : rawFailureRates),
+    [rawFailureRates, smoothLines]
   );
   const latencyMax = useMemo(() => {
     const maxValue = Math.max(...rawLatencyValues, 0);
     return maxValue > 0 ? getNiceMax(maxValue) : 1;
   }, [rawLatencyValues]);
   const timeBounds = useMemo(() => {
+    const endExclusive = rangeEndTime ?? (isToday ? Date.now() : null);
+    if (endExclusive && rangeHours > 0) {
+      const min = endExclusive - rangeHours * 60 * 60 * 1000;
+      return { min, max: endExclusive };
+    }
     const times = displayBuckets
       .map((bucket) => parseDate(bucket.bucketStart)?.getTime())
       .filter((value): value is number => typeof value === "number" && !Number.isNaN(value));
@@ -1776,7 +2141,7 @@ function HourlyTrendsPanel({
     const min = Math.min(...times);
     const max = Math.max(...times);
     return { min, max: max === min ? min + 1 : max };
-  }, [displayBuckets]);
+  }, [displayBuckets, isToday, rangeEndTime, rangeHours]);
   const points = useMemo(() => {
     const count = displayBuckets.length;
     return displayBuckets.map((bucket, index) => {
@@ -1787,13 +2152,17 @@ function HourlyTrendsPanel({
       const failureRate = smoothFailureRates[index] ?? rawFailureRate;
       const latencyValue = smoothLatencyValues[index] ?? rawLatencyValue;
       const time = parseDate(bucket.bucketStart)?.getTime();
+      const bucketTime =
+        typeof time === "number" && !Number.isNaN(time) ? time + bucketIntervalMs * 0.5 : null;
       const x = timeBounds
-        ? (clamp((time ?? timeBounds.min) - timeBounds.min, 0, timeBounds.max - timeBounds.min) /
+        ? (clamp((bucketTime ?? timeBounds.min) - timeBounds.min, 0, timeBounds.max - timeBounds.min) /
             (timeBounds.max - timeBounds.min)) *
           100
         : count <= 1
         ? 0
         : (index / (count - 1)) * 100;
+      const hasTotal = bucket.total > 0;
+      const hasLatency = bucket.success > 0;
       return {
         x,
         successRate,
@@ -1802,9 +2171,11 @@ function HourlyTrendsPanel({
         rawSuccessRate,
         rawFailureRate,
         rawLatencyValue,
-        successY: 100 - clamp(successRate, 0, 100),
-        failureY: 100 - clamp(failureRate, 0, 100),
-        latencyY: 100 - (clamp(latencyValue, 0, latencyMax) / latencyMax) * 100,
+        hasTotal,
+        hasLatency,
+        successY: clamp(100 - clamp(successRate, 0, 100), 2, 98),
+        failureY: clamp(100 - clamp(failureRate, 0, 100), 2, 98),
+        latencyY: clamp(100 - (clamp(latencyValue, 0, latencyMax) / latencyMax) * 100, 2, 98),
       };
     });
   }, [
@@ -1818,10 +2189,47 @@ function HourlyTrendsPanel({
     smoothFailureRates,
     smoothLatencyValues,
   ]);
-  const successPath = buildLinePath(points.map((point) => ({ x: point.x, y: point.successY })));
-  const failurePath = buildLinePath(points.map((point) => ({ x: point.x, y: point.failureY })));
-  const latencyPath = buildLinePath(points.map((point) => ({ x: point.x, y: point.latencyY })));
-  const latencyAreaPath = buildAreaPath(points.map((point) => ({ x: point.x, y: point.latencyY })));
+  const successPoints = points.map((point) => ({ x: point.x, y: point.successY }));
+  const failurePoints = points.map((point) => ({ x: point.x, y: point.failureY }));
+  const latencyPoints = points.map((point) => ({ x: point.x, y: point.latencyY }));
+  const successVisibility = points.map((point) => (bridgeGaps ? true : point.hasTotal));
+  const failureVisibility = points.map((point) => (bridgeGaps ? true : point.hasTotal));
+  const latencyVisibility = points.map((point) => (bridgeGaps ? true : point.hasLatency));
+  const successPath = bridgeGaps
+    ? buildLinePath(successPoints)
+    : buildLinePathWithGaps(successPoints, successVisibility);
+  const failurePath = bridgeGaps
+    ? buildLinePath(failurePoints)
+    : buildLinePathWithGaps(failurePoints, failureVisibility);
+  const latencyPath = bridgeGaps
+    ? buildLinePath(latencyPoints)
+    : buildLinePathWithGaps(latencyPoints, latencyVisibility);
+  const latencyAreaPath = bridgeGaps ? buildAreaPath(latencyPoints) : "";
+  const maxTotal = useMemo(
+    () =>
+      displayBuckets.reduce((max, bucket) => {
+        const value = Number.isFinite(bucket.total) ? bucket.total : 0;
+        return value > max ? value : max;
+      }, 0),
+    [displayBuckets]
+  );
+  const barWidth = useMemo(() => {
+    if (points.length <= 1) {
+      return 6;
+    }
+    const rough = 70 / points.length;
+    return clamp(rough, 1.6, 6);
+  }, [points.length]);
+  const bars = useMemo(() => {
+    return displayBuckets.map((bucket, index) => {
+      const total = Number.isFinite(bucket.total) ? bucket.total : 0;
+      const height = maxTotal > 0 ? (total / maxTotal) * 100 : 0;
+      const time = parseDate(bucket.bucketStart)?.getTime();
+      const isFuture = isToday && typeof time === "number" && time > Date.now();
+      const x = points[index]?.x ?? 0;
+      return { x, height, isFuture };
+    });
+  }, [displayBuckets, maxTotal, points, isToday]);
 
   const focusIndex = useMemo(() => {
     if (!points.length) {
@@ -1836,6 +2244,10 @@ function HourlyTrendsPanel({
   const activeBucket = activeIndex >= 0 ? displayBuckets[activeIndex] : null;
   const activeX = activePoint ? activePoint.x : 0;
   const tooltipLeft = clamp(activeX, 8, 92);
+  const latencyLabel =
+    activePoint && activeBucket && activeBucket.success > 0
+      ? formatLatency(activePoint.rawLatencyValue)
+      : "--";
 
   const latencyTicks = [1, 0.75, 0.5, 0.25, 0].map((ratio) => Math.round(latencyMax * ratio));
   const handleMouseMove = useCallback(
@@ -1880,19 +2292,24 @@ function HourlyTrendsPanel({
           </div>
           <p>{subtitle}</p>
         </div>
+        {intervalSelect ? <div className="trend-center">{intervalSelect}</div> : null}
         <div className="trend-controls">
           <div className="trend-legend">
             <span className="legend success">
               <i />
-              Success
+              Success rate
             </span>
             <span className="legend failure">
               <i />
-              Failure
+              Failure rate
             </span>
             <span className="legend latency">
               <i />
               Latency
+            </span>
+            <span className="legend volume">
+              <i />
+              Volume
             </span>
           </div>
           <div className="trend-range">
@@ -1907,6 +2324,24 @@ function HourlyTrendsPanel({
                 {hours}H
               </button>
             ))}
+          </div>
+          <div className="trend-range">
+            <button
+              type="button"
+              className={smoothLines ? "active" : undefined}
+              aria-pressed={smoothLines}
+              onClick={() => setSmoothLines((value) => !value)}
+            >
+              Smooth
+            </button>
+            <button
+              type="button"
+              className={bridgeGaps ? "active" : undefined}
+              aria-pressed={bridgeGaps}
+              onClick={() => setBridgeGaps((value) => !value)}
+            >
+              Bridge gaps
+            </button>
           </div>
         </div>
       </div>
@@ -1939,6 +2374,19 @@ function HourlyTrendsPanel({
                   <span key={`lat-${index}`}>{tick}ms</span>
                 ))}
               </div>
+              <div className="trend-bars">
+                {bars.map((bar, index) => (
+                  <span
+                    key={`bar-${index}`}
+                    className={`trend-bar${bar.isFuture ? " future" : ""}`}
+                    style={{
+                      left: `${bar.x}%`,
+                      height: `${bar.height}%`,
+                      width: `${barWidth}%`,
+                    }}
+                  />
+                ))}
+              </div>
               <div className="trend-lines" ref={linesRef}>
                 <svg viewBox="0 0 100 100" preserveAspectRatio="none">
                   <path className="line success" d={successPath} />
@@ -1957,22 +2405,46 @@ function HourlyTrendsPanel({
                   <path className="line latency" d={latencyPath} />
                 </svg>
                 {activePoint && <div className="trend-marker" style={{ left: `${activeX}%` }} />}
+                {activePoint && (
+                  <>
+                    <div className="trend-point success" style={{ left: `${activeX}%`, top: `${activePoint.successY}%` }} />
+                    <div className="trend-point failure" style={{ left: `${activeX}%`, top: `${activePoint.failureY}%` }} />
+                    <div className="trend-point latency" style={{ left: `${activeX}%`, top: `${activePoint.latencyY}%` }} />
+                  </>
+                )}
                 {activePoint && activeBucket && (
                   <div className="trend-tooltip" style={{ left: `${tooltipLeft}%` }}>
                     <div className="trend-tooltip-header">
-                      <span className="mono">{formatTooltipTime(activeBucket.bucketStart)}</span>
+                      <span className="mono">
+                        {formatTooltipRange(activeBucket.bucketStart, bucketIntervalMinutes)}
+                      </span>
                       {activePoint.rawFailureRate > 5 && <span className="trend-flag">Issue</span>}
                     </div>
                     <div className="trend-tooltip-grid">
                       <span className="dot success" />
-                      <span>Success</span>
+                      <span>Success rate</span>
                       <span className="mono">{formatPercent(activePoint.rawSuccessRate)}</span>
+                      <span className="dot success" />
+                      <span>Success count</span>
+                      <span className="mono">{formatNumber(activeBucket.success)}</span>
                       <span className="dot failure" />
-                      <span>Failure</span>
+                      <span>Failure rate</span>
                       <span className="mono">{formatPercent(activePoint.rawFailureRate)}</span>
+                      <span className="dot failure" />
+                      <span>Failure count</span>
+                      <span className="mono">{formatNumber(activeBucket.failure)}</span>
                       <span className="dot latency" />
                       <span>Latency</span>
-                      <span className="mono">{formatLatency(activePoint.rawLatencyValue)}</span>
+                      <span className="mono">{latencyLabel}</span>
+                      {activeBucket.failureSources?.length ? (
+                        <>
+                          <span className="dot failure" />
+                          <span>Failure source</span>
+                          <span className="mono">
+                            {formatSourceList(activeBucket.failureSources)}
+                          </span>
+                        </>
+                      ) : null}
                     </div>
                     <div className="trend-tooltip-arrow" />
                   </div>
