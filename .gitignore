@@ -11,6 +11,10 @@ node_modules
 dist
 dist-ssr
 *.local
+.vite
+coverage
+ui.out.log
+ui.err.log
 
 # Env files
 .env
