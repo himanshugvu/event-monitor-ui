@@ -24,6 +24,10 @@ ui.err.log
 # TypeScript
 *.tsbuildinfo
 
+# Generated fonts
+public/fonts/*.woff2
+public/fonts/fonts.css
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
