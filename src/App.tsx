@@ -1798,21 +1798,30 @@ function EventDetailsScreen({
                 <div className="section">
                   <h4>Metadata</h4>
                   <div className="meta-grid">
-                    {[
-                      { label: "Trace ID", value: selectedRow.event_trace_id, mono: true },
-                      { label: "Account", value: selectedRow.account_number, mono: true },
-                      { label: "Customer Type", value: selectedRow.customer_type },
-                      { label: "Received", value: formatDateTime(selectedRow.event_received_timestamp) },
-                      { label: "Sent", value: formatDateTime(selectedRow.event_sent_timestamp) },
-                      { label: "Latency", value: formatLatency(calculateLatencyMs(selectedRow) ?? undefined) },
-                      { label: "Source Topic", value: selectedRow.source_topic },
-                      { label: "Source Partition", value: selectedRow.source_partition_id },
-                      { label: "Source Offset", value: selectedRow.source_offset },
-                      { label: "Target Topic", value: selectedRow.target_topic },
-                      { label: "Target Partition", value: selectedRow.target_partition_id },
-                      { label: "Target Offset", value: selectedRow.target_offset },
-                      { label: "Message Key", value: selectedRow.message_key, mono: true },
-                    ].map((item) => (
+                    {(() => {
+                      const items = [
+                        { label: "Trace ID", value: selectedRow.event_trace_id, mono: true },
+                        { label: "Account", value: selectedRow.account_number, mono: true },
+                        { label: "Customer Type", value: selectedRow.customer_type },
+                        { label: "Received", value: formatDateTime(selectedRow.event_received_timestamp) },
+                        ...(tab === "failures"
+                          ? []
+                          : [{ label: "Sent", value: formatDateTime(selectedRow.event_sent_timestamp) }]),
+                        { label: "Latency", value: formatLatency(calculateLatencyMs(selectedRow) ?? undefined) },
+                        { label: "Source Topic", value: selectedRow.source_topic },
+                        { label: "Source Partition", value: selectedRow.source_partition_id },
+                        { label: "Source Offset", value: selectedRow.source_offset },
+                        { label: "Message Key", value: selectedRow.message_key, mono: true },
+                      ];
+                      if (tab !== "failures") {
+                        items.push(
+                          { label: "Target Topic", value: selectedRow.target_topic },
+                          { label: "Target Partition", value: selectedRow.target_partition_id },
+                          { label: "Target Offset", value: selectedRow.target_offset },
+                        );
+                      }
+                      return items;
+                    })().map((item) => (
                       <div key={item.label} className="meta-card">
                         <span>{item.label}</span>
                         <strong className={item.mono ? "mono" : undefined}>{toDisplayValue(item.value)}</strong>

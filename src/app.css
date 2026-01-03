@@ -2594,6 +2594,8 @@ tbody tr.clickable {
   font-size: 0.75rem;
   color: var(--text);
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .section-header {
@@ -2615,6 +2617,13 @@ tbody tr.clickable {
 .exception-title {
   font-weight: 700;
   margin-bottom: 0.4rem;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.error-box p {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .drawer-actions {
