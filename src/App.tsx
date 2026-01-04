@@ -12,6 +12,7 @@ type ThemeMode = "light" | "dark";
 type ScreenMode = "home" | "event";
 type StatusTone = "healthy" | "warning" | "critical";
 type DayMode = "today" | "yesterday" | "custom";
+type LatencyMetric = "p95" | "p99" | "max";
 
 type Kpis = {
   total: number;
@@ -21,6 +22,8 @@ type Kpis = {
   retriableFailures: number;
   avgLatencyMs: number;
   p95LatencyMs: number;
+  p99LatencyMs: number;
+  maxLatencyMs: number;
 };
 
 type EventBreakdownRow = {
@@ -39,6 +42,16 @@ type HomeAggregationResponse = {
   day: string;
   generatedAt: string;
   kpis: Kpis;
+  stageLatencies?: {
+    avgReceivedLatencyMs: number;
+    p95ReceivedLatencyMs: number;
+    p99ReceivedLatencyMs: number;
+    maxReceivedLatencyMs: number;
+    avgSentLatencyMs: number;
+    p95SentLatencyMs: number;
+    p99SentLatencyMs: number;
+    maxSentLatencyMs: number;
+  };
   events: EventBreakdownRow[];
 };
 
@@ -47,6 +60,16 @@ type EventSummaryResponse = {
   eventKey: string;
   generatedAt: string;
   kpis: Kpis;
+  stageLatencies?: {
+    avgReceivedLatencyMs: number;
+    p95ReceivedLatencyMs: number;
+    p99ReceivedLatencyMs: number;
+    maxReceivedLatencyMs: number;
+    avgSentLatencyMs: number;
+    p95SentLatencyMs: number;
+    p99SentLatencyMs: number;
+    maxSentLatencyMs: number;
+  };
 };
 
 type BucketPoint = {
@@ -73,14 +96,16 @@ type SuccessRow = {
   event_trace_id?: string;
   account_number?: string;
   customer_type?: string;
-  event_received_timestamp?: unknown;
+  event_date_time?: unknown;
   source_topic?: string;
   source_partition_id?: number;
   source_offset?: number;
   message_key?: string;
   source_payload?: string;
   transformed_payload?: string;
-  event_sent_timestamp?: unknown;
+  latency_ms?: number;
+  latency_event_received_ms?: number;
+  latency_event_sent_ms?: number;
   target_topic?: string;
   target_partition_id?: number;
   target_offset?: number;
@@ -113,6 +138,7 @@ type EventRow = EventBreakdownRow & {
   status: StatusTone;
 };
 const THEME_STORAGE_KEY = "event-monitor-ui-theme";
+const LATENCY_METRIC_STORAGE_KEY = "event-monitor-ui-latency-metric";
 const API_BASE = (import.meta.env.VITE_API_BASE ?? "").replace(/\/$/, "");
 
 const statusLabels: Record<StatusTone, string> = {
@@ -128,6 +154,34 @@ const getInitialTheme = (): ThemeMode => {
   }
   const prefersDark = window.matchMedia?.("(prefers-color-scheme: dark)").matches;
   return prefersDark ? "dark" : "light";
+};
+
+const normalizeLatencyMetric = (value?: string | null): LatencyMetric => {
+  if (value === "p99" || value === "max" || value === "p95") {
+    return value;
+  }
+  return "p95";
+};
+
+const getInitialLatencyMetric = (): LatencyMetric =>
+  normalizeLatencyMetric(window.localStorage.getItem(LATENCY_METRIC_STORAGE_KEY));
+
+const latencyMetricLabel = (metric: LatencyMetric) =>
+  metric === "max" ? "MAX" : metric.toUpperCase();
+
+const pickLatencyMetricValue = (
+  metric: LatencyMetric,
+  p95?: number,
+  p99?: number,
+  max?: number
+) => {
+  if (metric === "p99") {
+    return p99;
+  }
+  if (metric === "max") {
+    return max;
+  }
+  return p95;
 };
 
 const toLocalDayString = (date: Date) => {
@@ -157,6 +211,20 @@ const formatLatency = (value?: number) => {
   }
   return `${Math.round(value)}ms`;
 };
+
+const parseLatencyFilterValue = (value: string) => {
+  if (!value) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return undefined;
+  }
+  return Math.max(0, Math.round(parsed));
+};
+
+const formatLatencyPair = (avg?: number, secondary?: number, secondaryLabel = "P95") =>
+  `Avg ${formatLatency(avg)}\n${secondaryLabel} ${formatLatency(secondary)}`;
 
 const toCsvValue = (value: unknown) => {
   if (value === null || value === undefined) {
@@ -338,12 +406,11 @@ const toDisplayValue = (value: unknown) => {
 };
 
 const calculateLatencyMs = (row: SuccessRow | FailureRow) => {
-  const received = parseDate(row.event_received_timestamp);
-  const sent = parseDate(row.event_sent_timestamp);
-  if (!received || !sent) {
+  if (row.latency_ms === null || row.latency_ms === undefined) {
     return null;
   }
-  return Math.max(0, sent.getTime() - received.getTime());
+  const parsed = Number(row.latency_ms);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : null;
 };
 
 const isAbortError = (error: unknown) => {
@@ -522,11 +589,31 @@ async function fetchJson<T>(path: string, signal?: AbortSignal): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function postNoContent(path: string, signal?: AbortSignal): Promise<void> {
+  const response = await fetch(`${API_BASE}${path}`, { method: "POST", signal });
+  if (!response.ok) {
+    let message = `${response.status} ${response.statusText}`;
+    try {
+      const data = await response.json();
+      if (data && typeof data.message === "string") {
+        message = data.message;
+      }
+    } catch {
+      // keep fallback
+    }
+    throw new Error(message);
+  }
+}
+
 export default function App() {
   const [theme, setTheme] = useState<ThemeMode>(getInitialTheme);
+  const [latencyMetric, setLatencyMetric] = useState<LatencyMetric>(getInitialLatencyMetric);
   const [screen, setScreen] = useState<ScreenMode>("home");
   const [activeNav, setActiveNav] = useState("home");
   const [eventHeaderControls, setEventHeaderControls] = useState<React.ReactNode>(null);
+  const [homeRefreshIndex, setHomeRefreshIndex] = useState(0);
+  const [homeForceRefreshToken, setHomeForceRefreshToken] = useState(0);
+  const [homeForceRefreshError, setHomeForceRefreshError] = useState<string | null>(null);
   const [dayMode, setDayMode] = useState<DayMode>("today");
   const [day, setDay] = useState(() => toLocalDayString(new Date()));
   const [eventCatalog, setEventCatalog] = useState<EventCatalogItem[]>([]);
@@ -545,6 +632,38 @@ export default function App() {
     document.documentElement.dataset.theme = theme;
     window.localStorage.setItem(THEME_STORAGE_KEY, theme);
   }, [theme]);
+
+  useEffect(() => {
+    window.localStorage.setItem(LATENCY_METRIC_STORAGE_KEY, latencyMetric);
+  }, [latencyMetric]);
+
+  const cycleLatencyMetric = useCallback(() => {
+    setLatencyMetric((current) => {
+      if (current === "p95") {
+        return "p99";
+      }
+      if (current === "p99") {
+        return "max";
+      }
+      return "p95";
+    });
+  }, []);
+
+  const handleHomeRefresh = useCallback(() => {
+    setHomeRefreshIndex((value) => value + 1);
+  }, []);
+
+  const handleHomeForceRefresh = useCallback(() => {
+    setHomeForceRefreshError(null);
+    postNoContent("/api/v1/refresh/home")
+      .then(() => {
+        setHomeForceRefreshToken(Date.now());
+      })
+      .catch((error) => {
+        console.error("Home force refresh failed", error);
+        setHomeForceRefreshError(error instanceof Error ? error.message : String(error));
+      });
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -598,6 +717,7 @@ export default function App() {
           </div>
           <DateField day={day} onDayChange={setDay} onDayModeChange={setDayMode} />
         </div>
+        <RefreshMenu onRefresh={handleHomeRefresh} onHardRefresh={handleHomeForceRefresh} />
       </div>
     ) : null;
 
@@ -694,6 +814,11 @@ export default function App() {
           {screen === "home" ? (
             <HomeScreen
               day={day}
+              refreshIndex={homeRefreshIndex}
+              forceRefreshToken={homeForceRefreshToken}
+              forceRefreshError={homeForceRefreshError}
+              latencyMetric={latencyMetric}
+              onLatencyMetricToggle={cycleLatencyMetric}
               onOpenEvent={(eventKey) => {
                 setSelectedEvent(eventKey);
                 setScreen("event");
@@ -709,6 +834,8 @@ export default function App() {
               selectedEvent={selectedEvent}
               onSelectEvent={setSelectedEvent}
               eventCatalog={eventCatalog}
+              latencyMetric={latencyMetric}
+              onLatencyMetricToggle={cycleLatencyMetric}
               onHeaderControls={setEventHeaderControls}
             />
           )}
@@ -720,22 +847,39 @@ export default function App() {
 
 type HomeScreenProps = {
   day: string;
+  refreshIndex: number;
+  forceRefreshToken: number;
+  forceRefreshError: string | null;
   onOpenEvent: (eventKey: string) => void;
+  latencyMetric: LatencyMetric;
+  onLatencyMetricToggle: () => void;
 };
 
-function HomeScreen({ day, onOpenEvent }: HomeScreenProps) {
+function HomeScreen({
+  day,
+  refreshIndex,
+  forceRefreshToken,
+  forceRefreshError,
+  onOpenEvent,
+  latencyMetric,
+  onLatencyMetricToggle,
+}: HomeScreenProps) {
   const [home, setHome] = useState<HomeAggregationResponse | null>(null);
   const [homeLoading, setHomeLoading] = useState(false);
   const [homeError, setHomeError] = useState<string | null>(null);
   const [homeBuckets, setHomeBuckets] = useState<BucketPoint[] | null>(null);
   const [homeBucketsLoading, setHomeBucketsLoading] = useState(false);
   const [homeBucketsError, setHomeBucketsError] = useState<string | null>(null);
+  const homeBaselineRef = useRef<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
     setHomeLoading(true);
     setHomeError(null);
-    fetchJson<HomeAggregationResponse>(`/api/v1/days/${day}/home`, controller.signal)
+    fetchJson<HomeAggregationResponse>(
+      `/api/v1/days/${day}/home${refreshIndex > 0 ? `?refresh=true&nonce=${refreshIndex}` : ""}`,
+      controller.signal
+    )
       .then((data) => {
         setHome(data);
       })
@@ -748,9 +892,65 @@ function HomeScreen({ day, onOpenEvent }: HomeScreenProps) {
         if (!controller.signal.aborted) {
           setHomeLoading(false);
         }
-      });
+    });
     return () => controller.abort();
-  }, [day]);
+  }, [day, refreshIndex]);
+
+  useEffect(() => {
+    if (!forceRefreshToken) {
+      homeBaselineRef.current = null;
+      return;
+    }
+    if (home?.day === day) {
+      homeBaselineRef.current = home.generatedAt;
+    } else {
+      homeBaselineRef.current = null;
+    }
+  }, [day, forceRefreshToken, home?.day, home?.generatedAt]);
+
+  useEffect(() => {
+    if (!forceRefreshToken) {
+      return;
+    }
+    const baseline = homeBaselineRef.current;
+    let cancelled = false;
+    let timeoutId: number | null = null;
+    let controller: AbortController | null = null;
+    const poll = () => {
+      if (cancelled) {
+        return;
+      }
+      controller?.abort();
+      controller = new AbortController();
+      const nonce = `${forceRefreshToken}-${Date.now()}`;
+      fetchJson<HomeAggregationResponse>(`/api/v1/days/${day}/home?nonce=${nonce}`, controller.signal)
+        .then((data) => {
+          if (cancelled) {
+            return;
+          }
+          if (!baseline || data.generatedAt !== baseline) {
+            setHome(data);
+            setHomeError(null);
+            return;
+          }
+          timeoutId = window.setTimeout(poll, 10000);
+        })
+        .catch((error) => {
+          if (!isAbortError(error)) {
+            setHomeError(error instanceof Error ? error.message : String(error));
+            timeoutId = window.setTimeout(poll, 10000);
+          }
+        });
+    };
+    poll();
+    return () => {
+      cancelled = true;
+      if (timeoutId) {
+        window.clearTimeout(timeoutId);
+      }
+      controller?.abort();
+    };
+  }, [day, forceRefreshToken]);
 
   useEffect(() => {
     if (!home) {
@@ -767,12 +967,13 @@ function HomeScreen({ day, onOpenEvent }: HomeScreenProps) {
     setHomeBucketsLoading(true);
     setHomeBucketsError(null);
     Promise.all(
-      eventKeys.map((eventKey) =>
-        fetchJson<EventBucketsResponse>(
-          `/api/v1/days/${day}/events/${eventKey}/buckets?intervalMinutes=60`,
+      eventKeys.map((eventKey) => {
+        const refreshQuery = refreshIndex > 0 ? `&refresh=true&nonce=${refreshIndex}` : "";
+        return fetchJson<EventBucketsResponse>(
+          `/api/v1/days/${day}/events/${eventKey}/buckets?intervalMinutes=60${refreshQuery}`,
           controller.signal
-        )
-      )
+        );
+      })
     )
       .then((responses) => {
         if (controller.signal.aborted) {
@@ -834,7 +1035,7 @@ function HomeScreen({ day, onOpenEvent }: HomeScreenProps) {
         }
       });
     return () => controller.abort();
-  }, [home, day]);
+  }, [home, day, refreshIndex]);
 
   const eventRows = useMemo<EventRow[]>(() => {
     if (!home) {
@@ -864,6 +1065,9 @@ function HomeScreen({ day, onOpenEvent }: HomeScreenProps) {
 
   return (
     <section className="home">
+      {forceRefreshError && (
+        <div className="banner error">Force refresh failed: {forceRefreshError}</div>
+      )}
       {homeError && <div className="banner error">Failed to load home data: {homeError}</div>}
 
       <div className="kpi-grid">
@@ -883,18 +1087,67 @@ function HomeScreen({ day, onOpenEvent }: HomeScreenProps) {
           tone="warning"
         />
         <KpiCard
-          title="Avg Latency"
-          value={home ? formatLatency(home.kpis.avgLatencyMs) : "--"}
-          icon="timer"
+          title="Received Latency"
+          value={
+            home
+              ? formatLatencyPair(
+                  home.stageLatencies?.avgReceivedLatencyMs,
+                  pickLatencyMetricValue(
+                    latencyMetric,
+                    home.stageLatencies?.p95ReceivedLatencyMs,
+                    home.stageLatencies?.p99ReceivedLatencyMs,
+                    home.stageLatencies?.maxReceivedLatencyMs
+                  ),
+                  latencyMetricLabel(latencyMetric)
+                )
+              : "--"
+          }
+          icon="call_received"
           tone="info"
-          subtitle="Success only"
+          valueClassName="latency-value"
+          onIconClick={onLatencyMetricToggle}
         />
         <KpiCard
-          title="P95 Latency"
-          value={home ? formatLatency(home.kpis.p95LatencyMs) : "--"}
-          icon="insights"
+          title="Sent Latency"
+          value={
+            home
+              ? formatLatencyPair(
+                  home.stageLatencies?.avgSentLatencyMs,
+                  pickLatencyMetricValue(
+                    latencyMetric,
+                    home.stageLatencies?.p95SentLatencyMs,
+                    home.stageLatencies?.p99SentLatencyMs,
+                    home.stageLatencies?.maxSentLatencyMs
+                  ),
+                  latencyMetricLabel(latencyMetric)
+                )
+              : "--"
+          }
+          icon="call_made"
           tone="info"
-          subtitle="Success only"
+          valueClassName="latency-value"
+          onIconClick={onLatencyMetricToggle}
+        />
+        <KpiCard
+          title="Latency"
+          value={
+            home
+              ? formatLatencyPair(
+                  home.kpis.avgLatencyMs,
+                  pickLatencyMetricValue(
+                    latencyMetric,
+                    home.kpis.p95LatencyMs,
+                    home.kpis.p99LatencyMs,
+                    home.kpis.maxLatencyMs
+                  ),
+                  latencyMetricLabel(latencyMetric)
+                )
+              : "--"
+          }
+          icon="timer"
+          tone="info"
+          valueClassName="latency-value"
+          onIconClick={onLatencyMetricToggle}
         />
       </div>
 
@@ -979,6 +1232,8 @@ type EventDetailsScreenProps = {
   selectedEvent: string;
   onSelectEvent: (value: string) => void;
   eventCatalog: EventCatalogItem[];
+  latencyMetric: LatencyMetric;
+  onLatencyMetricToggle: () => void;
   onHeaderControls?: (node: React.ReactNode) => void;
 };
 
@@ -990,22 +1245,46 @@ function EventDetailsScreen({
   selectedEvent,
   onSelectEvent,
   eventCatalog,
+  latencyMetric,
+  onLatencyMetricToggle,
   onHeaderControls,
 }: EventDetailsScreenProps) {
   const [summary, setSummary] = useState<EventSummaryResponse | null>(null);
-  const [summaryLoading, setSummaryLoading] = useState(false);
-  const [summaryError, setSummaryError] = useState<string | null>(null);
-  const [buckets, setBuckets] = useState<EventBucketsResponse | null>(null);
-  const [bucketsLoading, setBucketsLoading] = useState(false);
-  const [bucketsError, setBucketsError] = useState<string | null>(null);
-  const [refreshIndex, setRefreshIndex] = useState(0);
-  const bucketInterval = 60;
-  const [tab, setTab] = useState<"success" | "failures">("failures");
+    const [summaryLoading, setSummaryLoading] = useState(false);
+    const [summaryError, setSummaryError] = useState<string | null>(null);
+    const [buckets, setBuckets] = useState<EventBucketsResponse | null>(null);
+    const [bucketsLoading, setBucketsLoading] = useState(false);
+    const [bucketsError, setBucketsError] = useState<string | null>(null);
+    const [refreshIndex, setRefreshIndex] = useState(0);
+    const [forceRefreshToken, setForceRefreshToken] = useState(0);
+    const bucketInterval = 60;
+    const summaryBaselineRef = useRef<string | null>(null);
+  const [tab, setTab] = useState<"success" | "failures">("success");
   const [searchTerm, setSearchTerm] = useState("");
   const [searchField, setSearchField] = useState<
-    "trace" | "account" | "exception" | "retriable"
+    "trace" | "account" | "exception" | "retriable" | "latency" | "latencyReceived"
   >("trace");
   const [searchValue, setSearchValue] = useState("");
+  const [latencyFilterInput, setLatencyFilterInput] = useState({
+    mode: "gt" as "gt" | "between",
+    min: "",
+    max: "",
+  });
+  const [receivedLatencyFilterInput, setReceivedLatencyFilterInput] = useState({
+    mode: "gt" as "gt" | "between",
+    min: "",
+    max: "",
+  });
+  const [latencyFilter, setLatencyFilter] = useState({
+    mode: "gt" as "gt" | "between",
+    min: "",
+    max: "",
+  });
+  const [receivedLatencyFilter, setReceivedLatencyFilter] = useState({
+    mode: "gt" as "gt" | "between",
+    min: "",
+    max: "",
+  });
   const [accountNumber, setAccountNumber] = useState("");
   const [fromDateTime, setFromDateTime] = useState("");
   const [toDateTime, setToDateTime] = useState("");
@@ -1053,7 +1332,9 @@ function EventDetailsScreen({
     setSummaryLoading(true);
     setSummaryError(null);
     fetchJson<EventSummaryResponse>(
-      `/api/v1/days/${day}/events/${selectedEvent}/summary`,
+      `/api/v1/days/${day}/events/${selectedEvent}/summary${
+        refreshIndex > 0 ? `?refresh=true&nonce=${refreshIndex}` : ""
+      }`,
       controller.signal
     )
       .then((data) => {
@@ -1072,16 +1353,18 @@ function EventDetailsScreen({
     return () => controller.abort();
   }, [day, selectedEvent, refreshIndex]);
 
-  useEffect(() => {
-    if (!selectedEvent) {
-      setBuckets(null);
-      return;
-    }
+    useEffect(() => {
+      if (!selectedEvent) {
+        setBuckets(null);
+        return;
+      }
     const controller = new AbortController();
     setBucketsLoading(true);
     setBucketsError(null);
     fetchJson<EventBucketsResponse>(
-      `/api/v1/days/${day}/events/${selectedEvent}/buckets?intervalMinutes=${bucketInterval}`,
+      `/api/v1/days/${day}/events/${selectedEvent}/buckets?intervalMinutes=${bucketInterval}${
+        refreshIndex > 0 ? `&refresh=true&nonce=${refreshIndex}` : ""
+      }`,
       controller.signal
     )
       .then((data) => {
@@ -1097,13 +1380,94 @@ function EventDetailsScreen({
           setBucketsLoading(false);
         }
       });
-    return () => controller.abort();
-  }, [day, selectedEvent, bucketInterval, refreshIndex]);
+      return () => controller.abort();
+    }, [day, selectedEvent, bucketInterval, refreshIndex]);
 
-  useEffect(() => {
-    if (searchField !== "exception" || !selectedEvent) {
-      return;
-    }
+    useEffect(() => {
+      if (!forceRefreshToken) {
+        summaryBaselineRef.current = null;
+        return;
+      }
+      if (summary?.day === day && summary?.eventKey === selectedEvent) {
+        summaryBaselineRef.current = summary.generatedAt;
+      } else {
+        summaryBaselineRef.current = null;
+      }
+    }, [day, forceRefreshToken, selectedEvent, summary?.day, summary?.eventKey, summary?.generatedAt]);
+
+    useEffect(() => {
+      if (!forceRefreshToken || !selectedEvent) {
+        return;
+      }
+      const baseline = summaryBaselineRef.current;
+      let cancelled = false;
+      let timeoutId: number | null = null;
+      let controller: AbortController | null = null;
+      const poll = () => {
+        if (cancelled) {
+          return;
+        }
+        controller?.abort();
+        controller = new AbortController();
+        const nonce = `${forceRefreshToken}-${Date.now()}`;
+        fetchJson<EventSummaryResponse>(
+          `/api/v1/days/${day}/events/${selectedEvent}/summary?nonce=${nonce}`,
+          controller.signal
+        )
+          .then((data) => {
+            if (cancelled) {
+              return;
+            }
+            if (!baseline || data.generatedAt !== baseline) {
+              setSummary(data);
+              setSummaryError(null);
+              const bucketsController = new AbortController();
+              setBucketsLoading(true);
+              fetchJson<EventBucketsResponse>(
+                `/api/v1/days/${day}/events/${selectedEvent}/buckets?intervalMinutes=${bucketInterval}&nonce=${nonce}`,
+                bucketsController.signal
+              )
+                .then((bucketData) => {
+                  if (!cancelled) {
+                    setBuckets(bucketData);
+                    setBucketsError(null);
+                  }
+                })
+                .catch((error) => {
+                  if (!isAbortError(error)) {
+                    setBucketsError(error instanceof Error ? error.message : String(error));
+                  }
+                })
+                .finally(() => {
+                  if (!cancelled && !bucketsController.signal.aborted) {
+                    setBucketsLoading(false);
+                  }
+                });
+              return;
+            }
+            timeoutId = window.setTimeout(poll, 10000);
+          })
+          .catch((error) => {
+            if (!isAbortError(error)) {
+              setSummaryError(error instanceof Error ? error.message : String(error));
+              timeoutId = window.setTimeout(poll, 10000);
+            }
+          });
+      };
+      poll();
+      return () => {
+        cancelled = true;
+        if (timeoutId) {
+          window.clearTimeout(timeoutId);
+        }
+        controller?.abort();
+      };
+    }, [bucketInterval, day, forceRefreshToken, selectedEvent]);
+
+    useEffect(() => {
+      if (searchField !== "exception" || !selectedEvent) {
+        return;
+      }
     const controller = new AbortController();
     setExceptionOptionsLoading(true);
     setExceptionOptionsError(null);
@@ -1135,29 +1499,27 @@ function EventDetailsScreen({
     return () => controller.abort();
   }, [day, fromDateTime, toDateTime, searchField, selectedEvent]);
 
-  useEffect(() => {
-    if (!selectedEvent) {
-      return;
-    }
-    setTab("failures");
-    setSearchTerm("");
-    setSearchField("trace");
-    setSearchValue("");
-    setAccountNumber("");
-    setExceptionType("");
-    setRetriable("all");
-    setRetriableInput("all");
+    useEffect(() => {
+      if (!selectedEvent) {
+        return;
+      }
+      setTab("success");
+      setSearchTerm("");
+      setSearchField("trace");
+      setSearchValue("");
+      setLatencyFilterInput({ mode: "gt", min: "", max: "" });
+      setReceivedLatencyFilterInput({ mode: "gt", min: "", max: "" });
+      setLatencyFilter({ mode: "gt", min: "", max: "" });
+      setReceivedLatencyFilter({ mode: "gt", min: "", max: "" });
+      setAccountNumber("");
+      setExceptionType("");
+      setRetriable("all");
+      setRetriableInput("all");
     setSuccessPage(0);
     setFailurePage(0);
     setDrawerOpen(false);
     setSelectedRow(null);
   }, [selectedEvent, day]);
-
-  useEffect(() => {
-    if (summary?.kpis.failure === 0 && tab === "failures") {
-      setTab("success");
-    }
-  }, [summary?.kpis.failure, tab]);
 
   useEffect(() => {
     if (tab !== "success") {
@@ -1175,23 +1537,35 @@ function EventDetailsScreen({
       return;
     }
     const controller = new AbortController();
-    setSuccessLoading(true);
-    setSuccessError(null);
-    setSuccessTotal(0);
-    const { traceId, messageKey } = resolveSearch(searchTerm);
-    const { date: fromDate, time: fromTime } = splitDateTimeInput(fromDateTime);
-    const { date: toDate, time: toTime } = splitDateTimeInput(toDateTime);
-    const query = buildQuery({
-      page: successPage,
-      size: pageSize,
-      traceId,
-      messageKey,
-      accountNumber: accountNumber.trim(),
-      fromDate,
-      toDate,
-      fromTime,
-      toTime,
-    });
+      setSuccessLoading(true);
+      setSuccessError(null);
+      setSuccessTotal(0);
+      const { traceId, messageKey } = resolveSearch(searchTerm);
+      const { date: fromDate, time: fromTime } = splitDateTimeInput(fromDateTime);
+      const { date: toDate, time: toTime } = splitDateTimeInput(toDateTime);
+      const latencyMin = parseLatencyFilterValue(latencyFilter.min);
+      const latencyMax =
+        latencyFilter.mode === "between" ? parseLatencyFilterValue(latencyFilter.max) : undefined;
+      const receivedLatencyMin = parseLatencyFilterValue(receivedLatencyFilter.min);
+      const receivedLatencyMax =
+        receivedLatencyFilter.mode === "between"
+          ? parseLatencyFilterValue(receivedLatencyFilter.max)
+          : undefined;
+      const query = buildQuery({
+        page: successPage,
+        size: pageSize,
+        traceId,
+        messageKey,
+        accountNumber: accountNumber.trim(),
+        latencyMin,
+        latencyMax,
+        receivedLatencyMin,
+        receivedLatencyMax,
+        fromDate,
+        toDate,
+        fromTime,
+        toTime,
+      });
     fetchJson<PagedRowsResponse<SuccessRow>>(
       `/api/v1/days/${day}/events/${selectedEvent}/success${query}`,
       controller.signal
@@ -1211,33 +1585,57 @@ function EventDetailsScreen({
         }
       });
     return () => controller.abort();
-  }, [tab, day, selectedEvent, successPage, searchTerm, accountNumber, fromDateTime, toDateTime]);
+    }, [
+      tab,
+      day,
+      selectedEvent,
+      successPage,
+      searchTerm,
+      accountNumber,
+      fromDateTime,
+      toDateTime,
+      latencyFilter,
+      receivedLatencyFilter,
+      refreshIndex,
+    ]);
 
   useEffect(() => {
     if (tab !== "failures" || !selectedEvent) {
       return;
     }
     const controller = new AbortController();
-    setFailureLoading(true);
-    setFailureError(null);
-    setFailureTotal(0);
-    const { traceId, messageKey } = resolveSearch(searchTerm);
-    const { date: fromDate, time: fromTime } = splitDateTimeInput(fromDateTime);
-    const { date: toDate, time: toTime } = splitDateTimeInput(toDateTime);
-    const query = buildQuery({
-      page: failurePage,
-      size: pageSize,
-      traceId,
-      messageKey,
-      accountNumber: accountNumber.trim(),
-      exceptionType: exceptionType.trim(),
-      retriable:
-        retriable === "all" ? undefined : retriable === "true" ? true : retriable === "false" ? false : undefined,
-      fromDate,
-      toDate,
-      fromTime,
-      toTime,
-    });
+      setFailureLoading(true);
+      setFailureError(null);
+      setFailureTotal(0);
+      const { traceId, messageKey } = resolveSearch(searchTerm);
+      const { date: fromDate, time: fromTime } = splitDateTimeInput(fromDateTime);
+      const { date: toDate, time: toTime } = splitDateTimeInput(toDateTime);
+      const latencyMin = parseLatencyFilterValue(latencyFilter.min);
+      const latencyMax =
+        latencyFilter.mode === "between" ? parseLatencyFilterValue(latencyFilter.max) : undefined;
+      const receivedLatencyMin = parseLatencyFilterValue(receivedLatencyFilter.min);
+      const receivedLatencyMax =
+        receivedLatencyFilter.mode === "between"
+          ? parseLatencyFilterValue(receivedLatencyFilter.max)
+          : undefined;
+      const query = buildQuery({
+        page: failurePage,
+        size: pageSize,
+        traceId,
+        messageKey,
+        accountNumber: accountNumber.trim(),
+        exceptionType: exceptionType.trim(),
+        retriable:
+          retriable === "all" ? undefined : retriable === "true" ? true : retriable === "false" ? false : undefined,
+        latencyMin,
+        latencyMax,
+        receivedLatencyMin,
+        receivedLatencyMax,
+        fromDate,
+        toDate,
+        fromTime,
+        toTime,
+      });
     fetchJson<PagedRowsResponse<FailureRow>>(
       `/api/v1/days/${day}/events/${selectedEvent}/failures${query}`,
       controller.signal
@@ -1257,18 +1655,21 @@ function EventDetailsScreen({
         }
       });
     return () => controller.abort();
-  }, [
-    tab,
-    day,
-    selectedEvent,
-    failurePage,
-    searchTerm,
-    accountNumber,
-    exceptionType,
-    retriable,
-    fromDateTime,
-    toDateTime,
-  ]);
+    }, [
+      tab,
+      day,
+      selectedEvent,
+      failurePage,
+      searchTerm,
+      accountNumber,
+      exceptionType,
+      retriable,
+      fromDateTime,
+      toDateTime,
+      latencyFilter,
+      receivedLatencyFilter,
+      refreshIndex,
+    ]);
 
   const rows = tab === "success" ? successRows : failureRows;
   const rowsLoading = tab === "success" ? successLoading : failureLoading;
@@ -1288,50 +1689,62 @@ function EventDetailsScreen({
     : summary?.generatedAt
     ? `Updated ${formatTimeAgo(summary.generatedAt)}`
     : "Not loaded";
-  const searchValuePlaceholder =
-    searchField === "exception"
-      ? "Exception type"
-      : searchField === "account"
-      ? "Account number"
-      : "Enter value";
+    const isLatencyFilter = searchField === "latency" || searchField === "latencyReceived";
+    const searchValuePlaceholder =
+      searchField === "exception"
+        ? "Exception type"
+        : searchField === "account"
+        ? "Account number"
+        : "Enter value";
   const exceptionSelectLabel = exceptionOptionsLoading
     ? "Loading..."
     : exceptionOptionsError
     ? "Failed to load"
     : "All exceptions";
+  const showReplay = tab === "failures" && !!selectedRow && "exception_type" in selectedRow;
 
-  const applyFilters = () => {
-    const trimmedSearch = searchValue.trim();
-    setSearchTerm("");
-    setAccountNumber("");
-    setExceptionType("");
-    setRetriable("all");
-    if (searchField === "trace") {
-      setSearchTerm(trimmedSearch);
-    } else if (searchField === "account") {
-      setAccountNumber(trimmedSearch);
-    } else if (searchField === "exception") {
-      setExceptionType(trimmedSearch);
-    } else if (searchField === "retriable") {
-      setRetriable(retriableInput === "all" ? "true" : retriableInput);
-    }
-    setFromDateTime(fromDateTimeInput);
-    setToDateTime(toDateTimeInput);
-    setSuccessPage(0);
-    setFailurePage(0);
-  };
+    const applyFilters = () => {
+      const trimmedSearch = searchValue.trim();
+      setSearchTerm("");
+      setAccountNumber("");
+      setExceptionType("");
+      setRetriable("all");
+      setLatencyFilter({ mode: "gt", min: "", max: "" });
+      setReceivedLatencyFilter({ mode: "gt", min: "", max: "" });
+      if (searchField === "trace") {
+        setSearchTerm(trimmedSearch);
+      } else if (searchField === "account") {
+        setAccountNumber(trimmedSearch);
+      } else if (searchField === "exception") {
+        setExceptionType(trimmedSearch);
+      } else if (searchField === "retriable") {
+        setRetriable(retriableInput === "all" ? "true" : retriableInput);
+      } else if (searchField === "latency") {
+        setLatencyFilter({ ...latencyFilterInput });
+      } else if (searchField === "latencyReceived") {
+        setReceivedLatencyFilter({ ...receivedLatencyFilterInput });
+      }
+      setFromDateTime(fromDateTimeInput);
+      setToDateTime(toDateTimeInput);
+      setSuccessPage(0);
+      setFailurePage(0);
+    };
 
-  const clearFilters = () => {
-    setSearchField("trace");
-    setSearchValue("");
-    setSearchTerm("");
-    setAccountNumber("");
-    setExceptionType("");
-    setRetriable("all");
-    setRetriableInput("all");
-    setFromDateTime("");
-    setToDateTime("");
-    setFromDateTimeInput("");
+    const clearFilters = () => {
+      setSearchField("trace");
+      setSearchValue("");
+      setSearchTerm("");
+      setAccountNumber("");
+      setExceptionType("");
+      setRetriable("all");
+      setRetriableInput("all");
+      setLatencyFilterInput({ mode: "gt", min: "", max: "" });
+      setReceivedLatencyFilterInput({ mode: "gt", min: "", max: "" });
+      setLatencyFilter({ mode: "gt", min: "", max: "" });
+      setReceivedLatencyFilter({ mode: "gt", min: "", max: "" });
+      setFromDateTime("");
+      setToDateTime("");
+      setFromDateTimeInput("");
     setToDateTimeInput("");
     setSuccessPage(0);
     setFailurePage(0);
@@ -1369,6 +1782,20 @@ function EventDetailsScreen({
   }, [failurePage]);
 
   const handleRefresh = useCallback(() => setRefreshIndex((value) => value + 1), []);
+    const handleForceRefresh = useCallback(() => {
+      if (!selectedEvent) {
+        return;
+      }
+      setSummaryError(null);
+      postNoContent(`/api/v1/refresh/events/${selectedEvent}`)
+        .then(() => {
+          setForceRefreshToken(Date.now());
+        })
+        .catch((error) => {
+          console.error("Event force refresh failed", error);
+          setSummaryError(error instanceof Error ? error.message : String(error));
+        });
+    }, [selectedEvent]);
 
   const headerControls = useMemo(
     () => (
@@ -1407,13 +1834,11 @@ function EventDetailsScreen({
             })}
           </select>
         </div>
-        <div className="refresh-stack">
-          <button className="button primary" onClick={handleRefresh}>
-            <span className="material-symbols-outlined">refresh</span>
-            Refresh
-          </button>
-          <span className="updated-inline">{updatedText}</span>
-        </div>
+        <RefreshMenu
+          onRefresh={handleRefresh}
+          onHardRefresh={handleForceRefresh}
+          updatedText={updatedText}
+        />
       </div>
     ),
     [day, dayMode, eventCatalogMap, eventOptions, handleRefresh, onDayChange, onDayModeChange, onSelectEvent, selectedEvent, updatedText]
@@ -1450,18 +1875,67 @@ function EventDetailsScreen({
           tone="warning"
         />
         <KpiCard
-          title="Avg Latency"
-          value={summary ? formatLatency(summary.kpis.avgLatencyMs) : "--"}
-          icon="timer"
+          title="Received Latency"
+          value={
+            summary
+              ? formatLatencyPair(
+                  summary.stageLatencies?.avgReceivedLatencyMs,
+                  pickLatencyMetricValue(
+                    latencyMetric,
+                    summary.stageLatencies?.p95ReceivedLatencyMs,
+                    summary.stageLatencies?.p99ReceivedLatencyMs,
+                    summary.stageLatencies?.maxReceivedLatencyMs
+                  ),
+                  latencyMetricLabel(latencyMetric)
+                )
+              : "--"
+          }
+          icon="call_received"
           tone="info"
-          subtitle="Success only"
+          valueClassName="latency-value"
+          onIconClick={onLatencyMetricToggle}
         />
         <KpiCard
-          title="P95 Latency"
-          value={summary ? formatLatency(summary.kpis.p95LatencyMs) : "--"}
-          icon="insights"
+          title="Sent Latency"
+          value={
+            summary
+              ? formatLatencyPair(
+                  summary.stageLatencies?.avgSentLatencyMs,
+                  pickLatencyMetricValue(
+                    latencyMetric,
+                    summary.stageLatencies?.p95SentLatencyMs,
+                    summary.stageLatencies?.p99SentLatencyMs,
+                    summary.stageLatencies?.maxSentLatencyMs
+                  ),
+                  latencyMetricLabel(latencyMetric)
+                )
+              : "--"
+          }
+          icon="call_made"
           tone="info"
-          subtitle="Success only"
+          valueClassName="latency-value"
+          onIconClick={onLatencyMetricToggle}
+        />
+        <KpiCard
+          title="Latency"
+          value={
+            summary
+              ? formatLatencyPair(
+                  summary.kpis.avgLatencyMs,
+                  pickLatencyMetricValue(
+                    latencyMetric,
+                    summary.kpis.p95LatencyMs,
+                    summary.kpis.p99LatencyMs,
+                    summary.kpis.maxLatencyMs
+                  ),
+                  latencyMetricLabel(latencyMetric)
+                )
+              : "--"
+          }
+          icon="timer"
+          tone="info"
+          valueClassName="latency-value"
+          onIconClick={onLatencyMetricToggle}
         />
       </div>
 
@@ -1487,88 +1961,192 @@ function EventDetailsScreen({
           </div>
 
           <div className="filter-panel">
-            <div className="filter-grid">
-              <div className="field">
-                <label>Search by</label>
-                <div className="select">
-                  <span className="material-symbols-outlined">filter_list</span>
-                  <select
-                    value={searchField}
-                    onChange={(event) => {
-                      const value = event.target.value as
-                        | "trace"
-                        | "account"
-                        | "exception"
-                        | "retriable";
-                      setSearchField(value);
-                      if (value === "account") {
-                        setSearchValue(accountNumber);
-                      } else if (value === "exception") {
-                        setSearchValue(exceptionType);
-                      } else if (value === "trace") {
-                        setSearchValue(searchTerm);
-                      } else if (value === "retriable") {
-                        if (retriableInput === "all") {
-                          setRetriableInput("true");
-                        }
-                        setSearchValue("");
-                      }
-                    }}
-                  >
-                    <option value="trace">Correlation ID</option>
-                    <option value="account">Account Number</option>
-                    {tab === "failures" ? <option value="exception">Exception Type</option> : null}
-                    {tab === "failures" ? <option value="retriable">Retriable</option> : null}
-                  </select>
-                </div>
-              </div>
-              <div className="field">
-                <label>Value</label>
-                {searchField === "retriable" ? (
+            <div className={`filter-grid${isLatencyFilter ? " latency-mode" : ""}`}>
+                <div className="field">
+                  <label>Search by</label>
                   <div className="select">
-                    <span className="material-symbols-outlined">fact_check</span>
+                    <span className="material-symbols-outlined">filter_list</span>
                     <select
-                      value={retriableInput === "all" ? "true" : retriableInput}
-                      onChange={(event) =>
-                        setRetriableInput(event.target.value as "true" | "false")
-                      }
-                    >
-                      <option value="true">Yes</option>
-                      <option value="false">No</option>
-                    </select>
-                  </div>
-                ) : searchField === "exception" ? (
-                  <div className="select">
-                    <span className="material-symbols-outlined">error</span>
-                    <select
-                      value={searchValue}
-                      onChange={(event) => setSearchValue(event.target.value)}
-                      disabled={exceptionOptionsLoading}
-                    >
-                      <option value="">{exceptionSelectLabel}</option>
-                      {exceptionOptions.map((option) => (
-                        <option key={option} value={option}>
-                          {option}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                ) : (
-                  <div className="search">
-                    <span className="material-symbols-outlined">search</span>
-                    <input
-                      placeholder={searchValuePlaceholder}
-                      value={searchValue}
-                      onChange={(event) => setSearchValue(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          applyFilters();
+                      className={isLatencyFilter ? "latency-search" : undefined}
+                      value={searchField}
+                      onChange={(event) => {
+                        const value = event.target.value as
+                          | "trace"
+                          | "account"
+                          | "exception"
+                          | "retriable"
+                          | "latency"
+                          | "latencyReceived";
+                        setSearchField(value);
+                        if (value === "account") {
+                          setSearchValue(accountNumber);
+                        } else if (value === "exception") {
+                          setSearchValue(exceptionType);
+                        } else if (value === "trace") {
+                          setSearchValue(searchTerm);
+                        } else if (value === "retriable") {
+                          if (retriableInput === "all") {
+                            setRetriableInput("true");
+                          }
+                          setSearchValue("");
+                        } else if (value === "latency" || value === "latencyReceived") {
+                          setSearchValue("");
                         }
                       }}
-                    />
+                    >
+                      <option value="trace">Correlation ID</option>
+                      <option value="account">Account Number</option>
+                      <option value="latency">Latency</option>
+                      <option value="latencyReceived">Latency received</option>
+                      {tab === "failures" ? <option value="exception">Exception Type</option> : null}
+                      {tab === "failures" ? <option value="retriable">Retriable</option> : null}
+                    </select>
                   </div>
-                )}
-              </div>
+                </div>
+                <div className="field">
+                  <label>Value</label>
+                  {searchField === "retriable" ? (
+                    <div className="select">
+                      <span className="material-symbols-outlined">fact_check</span>
+                      <select
+                        value={retriableInput === "all" ? "true" : retriableInput}
+                        onChange={(event) =>
+                          setRetriableInput(event.target.value as "true" | "false")
+                        }
+                      >
+                        <option value="true">Yes</option>
+                        <option value="false">No</option>
+                      </select>
+                    </div>
+                  ) : searchField === "exception" ? (
+                    <div className="select">
+                      <span className="material-symbols-outlined">error</span>
+                      <select
+                        value={searchValue}
+                        onChange={(event) => setSearchValue(event.target.value)}
+                        disabled={exceptionOptionsLoading}
+                      >
+                        <option value="">{exceptionSelectLabel}</option>
+                        {exceptionOptions.map((option) => (
+                          <option key={option} value={option}>
+                            {option}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : isLatencyFilter ? (
+                    <div
+                      className={`latency-filter ${
+                        (searchField === "latency"
+                          ? latencyFilterInput.mode
+                          : receivedLatencyFilterInput.mode) === "between"
+                          ? "between"
+                          : "single"
+                      }`}
+                    >
+                      <div className="latency-mode">
+                        <select
+                          value={
+                            searchField === "latency"
+                              ? latencyFilterInput.mode
+                              : receivedLatencyFilterInput.mode
+                          }
+                          onChange={(event) => {
+                            const mode = event.target.value as "gt" | "between";
+                            if (searchField === "latency") {
+                              setLatencyFilterInput((current) => ({ ...current, mode }));
+                            } else {
+                              setReceivedLatencyFilterInput((current) => ({ ...current, mode }));
+                            }
+                          }}
+                        >
+                          <option value="gt">&gt;</option>
+                          <option value="between">Between</option>
+                        </select>
+                      </div>
+                      <div className="latency-input min">
+                        <input
+                          inputMode="numeric"
+                          placeholder={
+                            (searchField === "latency"
+                              ? latencyFilterInput.mode
+                              : receivedLatencyFilterInput.mode) === "between"
+                              ? "Min"
+                              : "Value"
+                          }
+                          value={
+                            searchField === "latency"
+                              ? latencyFilterInput.min
+                              : receivedLatencyFilterInput.min
+                          }
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            if (searchField === "latency") {
+                              setLatencyFilterInput((current) => ({ ...current, min: value }));
+                            } else {
+                              setReceivedLatencyFilterInput((current) => ({ ...current, min: value }));
+                            }
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              applyFilters();
+                            }
+                          }}
+                        />
+                        <span className="latency-unit">ms</span>
+                      </div>
+                      {(searchField === "latency"
+                        ? latencyFilterInput.mode
+                        : receivedLatencyFilterInput.mode) === "between" ? (
+                        <>
+                          <span className="latency-sep">to</span>
+                          <div className="latency-input max">
+                            <input
+                              inputMode="numeric"
+                              placeholder="Max"
+                              value={
+                                searchField === "latency"
+                                  ? latencyFilterInput.max
+                                  : receivedLatencyFilterInput.max
+                              }
+                              onChange={(event) => {
+                                const value = event.target.value;
+                                if (searchField === "latency") {
+                                  setLatencyFilterInput((current) => ({ ...current, max: value }));
+                                } else {
+                                  setReceivedLatencyFilterInput((current) => ({
+                                    ...current,
+                                    max: value,
+                                  }));
+                                }
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  applyFilters();
+                                }
+                              }}
+                            />
+                            <span className="latency-unit">ms</span>
+                          </div>
+                        </>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <div className="search">
+                      <span className="material-symbols-outlined">search</span>
+                      <input
+                        placeholder={searchValuePlaceholder}
+                        value={searchValue}
+                        onChange={(event) => setSearchValue(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            applyFilters();
+                          }
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
               <div className="field">
                 <label>From</label>
                 <div className="datetime-group">
@@ -1612,7 +2190,7 @@ function EventDetailsScreen({
               <table className="table-wide">
                 <thead>
                   <tr>
-                    <th>Received</th>
+                    <th>Event time</th>
                     <th>Trace ID</th>
                     <th>Account</th>
                     <th>Customer Type</th>
@@ -1639,7 +2217,7 @@ function EventDetailsScreen({
                           className="clickable"
                           onClick={() => openRow(row)}
                         >
-                          <td className="mono">{formatDateTime(row.event_received_timestamp)}</td>
+                          <td className="mono">{formatDateTime(row.event_date_time)}</td>
                           <td className="mono">{toDisplayValue(row.event_trace_id)}</td>
                           <td className="mono">{toDisplayValue(row.account_number)}</td>
                           <td>{toDisplayValue(row.customer_type)}</td>
@@ -1669,13 +2247,14 @@ function EventDetailsScreen({
               <table className="table-wide">
                 <thead>
                   <tr>
-                    <th>Received</th>
+                    <th>Event time</th>
                     <th>Trace ID</th>
                     <th>Account</th>
                     <th>Exception</th>
                     <th>Message</th>
                     <th>Retriable</th>
                     <th>Retry</th>
+                    <th>Latency</th>
                     <th>Message Key</th>
                     <th className="right">Actions</th>
                   </tr>
@@ -1683,20 +2262,21 @@ function EventDetailsScreen({
                 <tbody>
                   {rows.length === 0 ? (
                     <tr>
-                      <td colSpan={9} className="empty-cell">
+                      <td colSpan={10} className="empty-cell">
                         No failure rows match the current filters.
                       </td>
                     </tr>
                   ) : (
                     failureRows.map((row, index) => {
                       const retriableLabel = row.retriable ? "Yes" : "No";
+                      const latencyMs = calculateLatencyMs(row);
                       return (
                         <tr
                           key={row.id ?? row.event_trace_id ?? `failure-${index}`}
                           className="clickable"
                           onClick={() => openRow(row)}
                         >
-                          <td className="mono">{formatDateTime(row.event_received_timestamp)}</td>
+                          <td className="mono">{formatDateTime(row.event_date_time)}</td>
                           <td className="mono">{toDisplayValue(row.event_trace_id)}</td>
                           <td className="mono">{toDisplayValue(row.account_number)}</td>
                           <td className="mono">{toDisplayValue(row.exception_type)}</td>
@@ -1708,6 +2288,7 @@ function EventDetailsScreen({
                             <span className={row.retriable ? "tag warning" : "tag neutral"}>{retriableLabel}</span>
                           </td>
                           <td className="mono muted">{toDisplayValue(row.retry_attempt)}</td>
+                          <td className="mono muted">{formatLatency(latencyMs ?? undefined)}</td>
                           <td className="mono">{toDisplayValue(row.message_key)}</td>
                           <td className="right">
                             <button
@@ -1803,16 +2384,27 @@ function EventDetailsScreen({
                         { label: "Trace ID", value: selectedRow.event_trace_id, mono: true },
                         { label: "Account", value: selectedRow.account_number, mono: true },
                         { label: "Customer Type", value: selectedRow.customer_type },
-                        { label: "Received", value: formatDateTime(selectedRow.event_received_timestamp) },
-                        ...(tab === "failures"
-                          ? []
-                          : [{ label: "Sent", value: formatDateTime(selectedRow.event_sent_timestamp) }]),
-                        { label: "Latency", value: formatLatency(calculateLatencyMs(selectedRow) ?? undefined) },
+                        { label: "Event time", value: formatDateTime(selectedRow.event_date_time) },
                         { label: "Source Topic", value: selectedRow.source_topic },
                         { label: "Source Partition", value: selectedRow.source_partition_id },
                         { label: "Source Offset", value: selectedRow.source_offset },
                         { label: "Message Key", value: selectedRow.message_key, mono: true },
                       ];
+                      items.splice(
+                        4,
+                        0,
+                        { label: "Latency", value: formatLatency(calculateLatencyMs(selectedRow) ?? undefined) }
+                      );
+                      items.splice(5, 0, {
+                        label: "Received Latency",
+                        value: formatLatency(selectedRow.latency_event_received_ms),
+                      });
+                      if (tab !== "failures") {
+                        items.splice(6, 0, {
+                          label: "Sent Latency",
+                          value: formatLatency(selectedRow.latency_event_sent_ms),
+                        });
+                      }
                       if (tab !== "failures") {
                         items.push(
                           { label: "Target Topic", value: selectedRow.target_topic },
@@ -1852,12 +2444,14 @@ function EventDetailsScreen({
                   </div>
                 </div>
               </div>
-              <div className="modal-actions">
-                <button className="button primary" onClick={() => setDrawerOpen(false)}>
-                  <span className="material-symbols-outlined">replay</span>
-                  Replay Event
-                </button>
-              </div>
+              {showReplay ? (
+                <div className="modal-actions">
+                  <button className="button primary" onClick={() => setDrawerOpen(false)}>
+                    <span className="material-symbols-outlined">replay</span>
+                    Replay Event
+                  </button>
+                </div>
+              ) : null}
             </div>
           </div>
         )}
@@ -1890,12 +2484,79 @@ function DateField({
   );
 }
 
+function RefreshMenu({
+  onRefresh,
+  onHardRefresh,
+  updatedText,
+}: {
+  onRefresh: () => void;
+  onHardRefresh: () => void;
+  updatedText?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const handleClick = (event: globalThis.MouseEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [open]);
+
+  return (
+    <div className="refresh-stack" ref={containerRef}>
+      <button
+        className="button primary"
+        onClick={onRefresh}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          setOpen(true);
+        }}
+      >
+        <span className="material-symbols-outlined">refresh</span>
+        Refresh
+      </button>
+      {updatedText ? <span className="updated-inline">{updatedText}</span> : null}
+      {open ? (
+        <div className="refresh-menu">
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              onRefresh();
+            }}
+          >
+            Refresh day
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              onHardRefresh();
+            }}
+          >
+            Hard refresh (7 days)
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function KpiCard({
   title,
   value,
   subtitle,
   icon,
   tone = "neutral",
+  valueClassName,
+  onIconClick,
   children,
 }: {
   title: string;
@@ -1903,15 +2564,28 @@ function KpiCard({
   subtitle?: string;
   icon: string;
   tone?: "success" | "warning" | "danger" | "info" | "neutral";
+  valueClassName?: string;
+  onIconClick?: () => void;
   children?: ReactNode;
 }) {
   return (
     <div className={`kpi-card ${tone}`}>
       <div className="kpi-head">
         <span>{title}</span>
-        <span className="material-symbols-outlined">{icon}</span>
+        {onIconClick ? (
+          <button
+            className="kpi-icon-button material-symbols-outlined"
+            type="button"
+            onClick={onIconClick}
+            aria-label={`${title} metric toggle`}
+          >
+            {icon}
+          </button>
+        ) : (
+          <span className="material-symbols-outlined">{icon}</span>
+        )}
       </div>
-      <div className="kpi-value mono">{value}</div>
+      <div className={`kpi-value mono${valueClassName ? ` ${valueClassName}` : ""}`}>{value}</div>
       {subtitle && <div className="kpi-sub">{subtitle}</div>}
       {children}
     </div>

@@ -841,7 +841,11 @@ input::placeholder {
 }
 
 .page.page-compact .kpi-value {
-  font-size: 1.1rem;
+  font-size: 1rem;
+}
+
+.page.page-compact .kpi-value.latency-value {
+  font-size: 0.83rem;
 }
 
 .page.page-compact .kpi-sub {
@@ -857,7 +861,7 @@ input::placeholder {
 }
 
 .page.page-compact .filter-panel {
-  padding: 0.7rem 0.9rem;
+  padding: 0.8rem 0.9rem 1.1rem;
   gap: 0.6rem;
 }
 
@@ -1024,6 +1028,39 @@ input::placeholder {
   align-items: center;
   gap: 0.15rem;
   min-width: max-content;
+  position: relative;
+}
+
+.refresh-menu {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  background: var(--surface);
+  border: var(--border-width) solid var(--border);
+  border-radius: 12px;
+  padding: 0.35rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  box-shadow: var(--shadow-card);
+  z-index: 20;
+  min-width: 180px;
+}
+
+.refresh-menu button {
+  border: none;
+  background: transparent;
+  text-align: left;
+  padding: 0.45rem 0.6rem;
+  border-radius: 8px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.refresh-menu button:hover {
+  background: var(--surface-2);
 }
 
 .updated-row {
@@ -1215,6 +1252,14 @@ input::placeholder {
   .kpi-grid {
     grid-template-columns: repeat(7, minmax(140px, 1fr));
   }
+
+  .home .kpi-grid {
+    grid-template-columns: repeat(8, minmax(130px, 1fr));
+  }
+
+  .page.page-compact .kpi-grid {
+    grid-template-columns: repeat(8, minmax(120px, 1fr));
+  }
 }
 
 .kpi-card {
@@ -1255,6 +1300,22 @@ input::placeholder {
   color: var(--text-sub);
 }
 
+.kpi-icon-button {
+  border: none;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  color: inherit;
+  line-height: 1;
+}
+
+.kpi-icon-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
 .kpi-card.success .kpi-head .material-symbols-outlined {
   color: var(--success);
 }
@@ -1274,10 +1335,21 @@ input::placeholder {
 .kpi-value {
   font-size: 1.45rem;
   font-weight: 700;
+  line-height: 1.2;
+}
+
+.kpi-value.latency-value {
+  font-size: 0.83rem;
+  white-space: pre-line;
+  line-height: 1.25;
 }
 
 .home .kpi-value {
   font-size: 1.1rem;
+}
+
+.home .kpi-value.latency-value {
+  font-size: 0.83rem;
 }
 
 .kpi-sub {
@@ -2052,7 +2124,9 @@ input::placeholder {
   border-radius: 16px;
   background: var(--surface);
   box-shadow: var(--shadow-soft);
-  padding: 1rem 1.1rem;
+  --filter-control-height: 32px;
+  overflow: hidden;
+  padding: 1rem 1.1rem 1.3rem;
   display: flex;
   flex-direction: column;
   gap: 0.9rem;
@@ -2088,24 +2162,173 @@ input::placeholder {
 .filter-actions.inline-actions {
   justify-content: flex-end;
   align-items: center;
-  padding-top: 1.3rem;
+  padding-top: 0;
+  align-self: end;
 }
 
-.filter-grid {
+.filter-actions.inline-actions .button.small {
+  height: var(--filter-control-height);
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.filter-grid,
+.filter-grid.latency-mode {
   display: grid;
   gap: 0.9rem;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: minmax(240px, 1.1fr) minmax(320px, 1.4fr) minmax(220px, 1fr) minmax(220px, 1fr) auto;
+  align-items: end;
+  padding-bottom: 0.2rem;
 }
 
 
 .filter-panel .search {
   width: 100%;
   min-width: 0;
+  padding: 0 0.6rem;
+  box-shadow: none;
 }
 
 .filter-panel .select {
   width: 100%;
+  padding: 0 0.6rem;
+  box-shadow: none;
 }
+
+.filter-panel .select,
+.filter-panel .search,
+.filter-panel .datetime-group {
+  height: var(--filter-control-height);
+  min-height: var(--filter-control-height);
+  align-items: center;
+  padding-top: 0;
+  padding-bottom: 0;
+  box-sizing: border-box;
+  margin-bottom: 0;
+}
+
+.filter-panel .select select,
+.filter-panel .search input,
+.filter-panel .latency-mode select,
+.filter-panel .datetime-group .datetime-input {
+  height: 100%;
+  box-sizing: border-box;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.filter-panel .latency-filter {
+  display: grid;
+  align-items: stretch;
+  gap: 0.4rem;
+  width: 100%;
+  min-width: 0;
+  height: var(--filter-control-height);
+  border: var(--border-width) solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  padding: 0 0.4rem;
+  box-sizing: border-box;
+}
+
+.filter-panel .latency-filter.single {
+  grid-template-columns: 30% 1fr;
+}
+
+.filter-panel .latency-filter.between {
+  grid-template-columns: 30% 1fr auto 1fr;
+}
+
+.filter-panel .latency-filter .latency-toggle,
+.filter-panel .latency-filter .latency-input {
+  min-width: 0;
+}
+
+.filter-panel .latency-filter .latency-mode {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  min-height: 0;
+  height: 100%;
+  box-shadow: none;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+}
+
+.filter-panel .latency-filter .latency-mode select {
+  border: none;
+  background: transparent;
+  width: 100%;
+  min-width: 0;
+  font-size: 0.82rem;
+  font-weight: 600;
+  height: 100%;
+  padding: 0 0.2rem;
+}
+
+.filter-panel .latency-filter .latency-input {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  box-shadow: none;
+  align-self: stretch;
+}
+
+
+.filter-panel .latency-filter .latency-input input {
+  border: none;
+  background: transparent;
+  padding: 0 0.2rem;
+  width: 100%;
+  min-width: 0;
+  font-weight: 600;
+  font-size: 0.82rem;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.filter-panel .latency-filter .latency-input input:focus {
+  outline: none;
+}
+
+.filter-panel .latency-filter .latency-unit {
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: var(--text-sub);
+}
+
+.filter-panel .latency-filter .latency-sep {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-sub);
+  text-align: center;
+  align-self: center;
+}
+
+@media (max-width: 1200px) {
+  .filter-grid,
+  .filter-grid.latency-mode {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  }
+}
+
+.filter-panel .select select.latency-search {
+  background-image: none;
+  padding-right: 0.8rem;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+}
+
 
 .search {
   display: flex;
@@ -2170,6 +2393,8 @@ input::placeholder {
   padding: 0.3rem 0.4rem;
   font-size: 0.85rem;
   font-weight: 600;
+  height: 100%;
+  box-sizing: border-box;
 }
 
 .field .datetime-group .datetime-input:focus {
