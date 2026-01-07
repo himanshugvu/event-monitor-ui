@@ -583,7 +583,7 @@ export function EventDetailsScreen({
     if (!needsPayload) {
       return;
     }
-    const id = row.id;
+    const id = String(row.id);
     const detailPath =
       "exception_type" in row
         ? `/api/v1/days/${day}/events/${selectedEvent}/failures/${id}`
@@ -591,7 +591,7 @@ export function EventDetailsScreen({
     fetchJson<SuccessRow | FailureRow>(detailPath)
       .then((data) => {
         setSelectedRow((current) => {
-          if (!current || current.id !== id) {
+          if (!current || String(current.id) !== id) {
             return current;
           }
           return data;

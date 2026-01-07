@@ -19,8 +19,6 @@ const SECONDS = Array.from({ length: 60 }, (_, index) => pad2(index));
 const toDateValue = (date: Date) =>
   `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
 
-const toTimeValue = (date: Date) => `${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
-
 const parseDateOnly = (value: string) => {
   const [year, month, day] = value.split("-").map((part) => Number(part));
   if (!year || !month || !day) {

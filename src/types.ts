@@ -89,7 +89,7 @@ export type HomeBucketsResponse = {
 };
 
 export type SuccessRow = {
-  id?: number;
+  id?: string;
   event_trace_id?: string;
   account_number?: string;
   customer_type?: string;
