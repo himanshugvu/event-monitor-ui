@@ -1,0 +1,18 @@
+# Node
+node_modules
+npm-debug.log
+
+# Build output
+dist
+
+# Vite cache
+.vite
+
+# Logs
+ui.out.log
+ui.err.log
+
+# Git/IDE
+.git
+.idea
+.vscode
