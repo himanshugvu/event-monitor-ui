@@ -225,6 +225,21 @@ export function CalendarPicker({
     applySelection(draftDate);
   };
 
+  const handleNow = () => {
+    const now = new Date();
+    setDraftDate(now);
+    setViewMonth(new Date(now.getFullYear(), now.getMonth(), 1));
+    const nextParts = buildTimeParts(now);
+    setTimeParts(nextParts);
+    if (withTime) {
+      const normalized = normalizeTimeParts(nextParts);
+      onChange(`${toDateValue(now)}T${normalized.hour}:${normalized.minute}:${normalized.second}`);
+    } else {
+      onChange(toDateValue(now));
+    }
+    setOpen(false);
+  };
+
   const displayDate = useMemo(() => {
     if (withTime && open) {
       const next = new Date(draftDate);
@@ -371,6 +386,11 @@ export function CalendarPicker({
             ) : null}
           </div>
           <div className="calendar-footer">
+            {withTime ? (
+              <button className="button ghost small" type="button" onClick={handleNow}>
+                Now
+              </button>
+            ) : null}
             <button className="button ghost small" type="button" onClick={() => setOpen(false)}>
               Cancel
             </button>

@@ -32,3 +32,32 @@ export async function postNoContent(path: string, signal?: AbortSignal): Promise
     throw new Error(message);
   }
 }
+
+export async function postJson<T>(
+  path: string,
+  body: unknown,
+  signal?: AbortSignal
+): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!response.ok) {
+    let message = `${response.status} ${response.statusText}`;
+    try {
+      const data = await response.json();
+      if (data && typeof data.message === "string") {
+        message = data.message;
+      }
+    } catch {
+      // keep fallback
+    }
+    throw new Error(message);
+  }
+  if (response.status === 204) {
+    return undefined as T;
+  }
+  return response.json() as Promise<T>;
+}

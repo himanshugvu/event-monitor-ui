@@ -1,5 +1,5 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { fetchJson, postNoContent } from "../api/client";
+import { fetchJson, postJson, postNoContent } from "../api/client";
 import { CalendarPicker } from "../components/CalendarPicker";
 import { DateField } from "../components/DateField";
 import { HourlyTrendsPanel } from "../components/HourlyTrendsPanel";
@@ -17,7 +17,7 @@ import type {
   SuccessRow,
 } from "../types";
 import { clamp } from "../utils/chart";
-import { splitDateTimeInput } from "../utils/date";
+import { splitDateTimeInput, toLocalDayString } from "../utils/date";
 import { isAbortError } from "../utils/errors";
 import {
   formatDateTime,
@@ -51,6 +51,13 @@ export type EventDetailsScreenProps = {
   onHeaderControls?: (node: ReactNode) => void;
 };
 
+const pad2 = (value: number) => String(value).padStart(2, "0");
+
+const formatLocalDateTime = (date: Date) =>
+  `${toLocalDayString(date)}T${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(
+    date.getSeconds()
+  )}`;
+
 export function EventDetailsScreen({
   day,
   dayMode,
@@ -76,8 +83,8 @@ export function EventDetailsScreen({
   const [tab, setTab] = useState<"success" | "failures">("success");
   const [searchTerm, setSearchTerm] = useState("");
   const [searchField, setSearchField] = useState<
-    "trace" | "account" | "exception" | "retriable" | "latency" | "latencyReceived"
-  >("trace");
+    "none" | "trace" | "account" | "exception" | "retriable" | "latency" | "latencyReceived"
+  >("none");
   const [searchValue, setSearchValue] = useState("");
   const [latencyFilterInput, setLatencyFilterInput] = useState({
     mode: "gt" as "gt" | "between",
@@ -100,10 +107,17 @@ export function EventDetailsScreen({
     max: "",
   });
   const [accountNumber, setAccountNumber] = useState("");
-  const [fromDateTime, setFromDateTime] = useState("");
-  const [toDateTime, setToDateTime] = useState("");
-  const [fromDateTimeInput, setFromDateTimeInput] = useState("");
-  const [toDateTimeInput, setToDateTimeInput] = useState("");
+  const buildDefaultRange = useCallback((value: string) => {
+    const today = toLocalDayString(new Date());
+    return {
+      from: `${value}T00:00:00`,
+      to: value === today ? formatLocalDateTime(new Date()) : `${value}T23:59:59`,
+    };
+  }, []);
+  const [fromDateTime, setFromDateTime] = useState(() => buildDefaultRange(day).from);
+  const [toDateTime, setToDateTime] = useState(() => buildDefaultRange(day).to);
+  const [fromDateTimeInput, setFromDateTimeInput] = useState(() => buildDefaultRange(day).from);
+  const [toDateTimeInput, setToDateTimeInput] = useState(() => buildDefaultRange(day).to);
   const [exceptionType, setExceptionType] = useState("");
   const [exceptionOptions, setExceptionOptions] = useState<string[]>([]);
   const [exceptionOptionsLoading, setExceptionOptionsLoading] = useState(false);
@@ -126,7 +140,16 @@ export function EventDetailsScreen({
   const [failurePageInput, setFailurePageInput] = useState("1");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedRow, setSelectedRow] = useState<SuccessRow | FailureRow | null>(null);
+  const [selectedRowIds, setSelectedRowIds] = useState<string[]>([]);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectionScope, setSelectionScope] = useState<"page" | "allFailed" | null>(null);
+  const [replayError, setReplayError] = useState<string | null>(null);
+  const [replayNotice, setReplayNotice] = useState<string | null>(null);
+  const [replayConfirmOpen, setReplayConfirmOpen] = useState(false);
+  const [replayConfirmMode, setReplayConfirmMode] = useState<"ids" | "filters" | null>(null);
+  const [replayWorking, setReplayWorking] = useState(false);
   const pageSize = 50;
+  const maxReplaySelection = 50;
   const eventCatalogMap = useMemo(
     () => new Map(eventCatalog.map((item) => [item.eventKey, item])),
     [eventCatalog]
@@ -321,7 +344,7 @@ export function EventDetailsScreen({
       }
       setTab("success");
       setSearchTerm("");
-      setSearchField("trace");
+      setSearchField("none");
       setSearchValue("");
       setLatencyFilterInput({ mode: "gt", min: "", max: "" });
       setReceivedLatencyFilterInput({ mode: "gt", min: "", max: "" });
@@ -331,19 +354,36 @@ export function EventDetailsScreen({
       setExceptionType("");
       setRetriable("all");
       setRetriableInput("all");
+      const defaults = buildDefaultRange(day);
+      setFromDateTime(defaults.from);
+      setToDateTime(defaults.to);
+      setFromDateTimeInput(defaults.from);
+      setToDateTimeInput(defaults.to);
     setSuccessPage(0);
     setFailurePage(0);
     setDrawerOpen(false);
     setSelectedRow(null);
-  }, [selectedEvent, day]);
+  }, [buildDefaultRange, day, selectedEvent]);
+
+  useEffect(() => {
+    if (fromDateTimeInput || toDateTimeInput) {
+      return;
+    }
+    const defaults = buildDefaultRange(day);
+    setFromDateTime(defaults.from);
+    setToDateTime(defaults.to);
+    setFromDateTimeInput(defaults.from);
+    setToDateTimeInput(defaults.to);
+  }, [buildDefaultRange, day, fromDateTimeInput, toDateTimeInput]);
 
   useEffect(() => {
     if (tab !== "success") {
       return;
     }
     if (searchField === "exception" || searchField === "retriable") {
-      setSearchField("trace");
-      setSearchValue(searchTerm);
+      setSearchField("none");
+      setSearchValue("");
+      setSearchTerm("");
       setRetriableInput("all");
     }
   }, [searchField, searchTerm, tab]);
@@ -352,6 +392,8 @@ export function EventDetailsScreen({
     if (tab !== "success" || !selectedEvent) {
       return;
     }
+    setFromDateTimeInput((current) => (current === fromDateTime ? current : fromDateTime));
+    setToDateTimeInput((current) => (current === toDateTime ? current : toDateTime));
     const controller = new AbortController();
       setSuccessLoading(true);
       setSuccessError(null);
@@ -420,6 +462,8 @@ export function EventDetailsScreen({
     if (tab !== "failures" || !selectedEvent) {
       return;
     }
+    setFromDateTimeInput((current) => (current === fromDateTime ? current : fromDateTime));
+    setToDateTimeInput((current) => (current === toDateTime ? current : toDateTime));
     const controller = new AbortController();
       setFailureLoading(true);
       setFailureError(null);
@@ -511,7 +555,9 @@ export function EventDetailsScreen({
     : "Not loaded";
     const isLatencyFilter = searchField === "latency" || searchField === "latencyReceived";
     const searchValuePlaceholder =
-      searchField === "exception"
+      searchField === "none"
+        ? "Select a filter"
+        : searchField === "exception"
         ? "Exception type"
         : searchField === "account"
         ? "Account number"
@@ -522,6 +568,33 @@ export function EventDetailsScreen({
     ? "Failed to load"
     : "All exceptions";
   const showReplay = tab === "failures" && !!selectedRow && "exception_type" in selectedRow;
+  const replayConfirmTitle =
+    replayConfirmMode === "filters" ? "Replay All Failed" : "Replay Selected";
+  const replayScopeLabel =
+    replayConfirmMode === "filters" ? "All failed (filters)" : `Selected (${selectedRowIds.length})`;
+  const pageSelectableIds = useMemo(
+    () =>
+      rows
+        .map((row) => (row.id === undefined || row.id === null ? null : String(row.id)))
+        .filter((value): value is string => Boolean(value)),
+    [rows]
+  );
+  const selectedRowIdSet = useMemo(() => new Set(selectedRowIds), [selectedRowIds]);
+  const allPageSelected =
+    pageSelectableIds.length > 0 && pageSelectableIds.every((id) => selectedRowIdSet.has(id));
+  const selectionNote = selectedRowIds.length >= maxReplaySelection ? "Max 50 selected" : "";
+  const { traceId: replayTraceId } = resolveSearch(searchTerm);
+  const selectedRowsForReplay = useMemo(() => {
+    if (!selectedRowIds.length) {
+      return [];
+    }
+    const map = new Map(
+      rows
+        .filter((row) => row.id !== undefined && row.id !== null)
+        .map((row) => [String(row.id), row])
+    );
+    return selectedRowIds.map((id) => map.get(id)).filter(Boolean);
+  }, [rows, selectedRowIds]);
 
     const applyFilters = () => {
       const trimmedSearch = searchValue.trim();
@@ -550,8 +623,163 @@ export function EventDetailsScreen({
       setFailurePage(0);
     };
 
+    const toggleRowSelection = (rowId: string | null) => {
+      if (!rowId) {
+        return;
+      }
+      if (selectionScope === "page") {
+        setSelectionScope(null);
+      }
+      if (selectionScope !== "page") {
+        setSelectionScope("page");
+      }
+      setSelectedRowIds((current) => {
+        if (current.includes(rowId)) {
+          return current.filter((id) => id !== rowId);
+        }
+        if (current.length >= maxReplaySelection) {
+          return current;
+        }
+        return [...current, rowId];
+      });
+    };
+
+  const handleReplaySelected = () => {
+    if (!selectedRowIds.length || selectedRowIds.length > maxReplaySelection) {
+      return;
+    }
+    console.info("Replay selected events", selectedRowIds);
+    setSelectedRowIds([]);
+    setSelectionScope(null);
+  };
+
+  const startSelectionMode = () => {
+    setSelectionMode(true);
+    setSelectionScope(null);
+    setSelectedRowIds([]);
+  };
+
+  const startSelectionPage = () => {
+    setSelectionMode(true);
+    setSelectionScope("page");
+    setSelectedRowIds(pageSelectableIds.slice(0, maxReplaySelection));
+  };
+
+  const startSelectionAllFailed = () => {
+    setSelectionMode(true);
+    setSelectionScope("allFailed");
+    setSelectedRowIds([]);
+  };
+
+  const clearSelection = () => {
+    setSelectedRowIds([]);
+    setSelectionScope(null);
+  };
+
+  const exitSelectionMode = () => {
+    setSelectionMode(false);
+    setSelectedRowIds([]);
+    setSelectionScope(null);
+  };
+
+  const handleReplayAction = () => {
+    if (selectionScope === "allFailed") {
+      setReplayConfirmMode("filters");
+      setReplayConfirmOpen(true);
+      return;
+    }
+    setReplayConfirmMode("ids");
+    setReplayConfirmOpen(true);
+  };
+
+    const confirmReplay = async () => {
+      if (!replayConfirmMode) {
+        return;
+      }
+      setReplayError(null);
+      setReplayNotice(null);
+      setReplayWorking(true);
+      const { traceId, messageKey } = resolveSearch(searchTerm);
+      const { date: fromDate, time: fromTime } = splitDateTimeInput(fromDateTime);
+      const { date: toDate, time: toTime } = splitDateTimeInput(toDateTime);
+      const latencyMin = parseLatencyFilterValue(latencyFilter.min);
+      const latencyMax =
+        latencyFilter.mode === "between" ? parseLatencyFilterValue(latencyFilter.max) : undefined;
+      const receivedLatencyMin = parseLatencyFilterValue(receivedLatencyFilter.min);
+      const receivedLatencyMax =
+        receivedLatencyFilter.mode === "between"
+          ? parseLatencyFilterValue(receivedLatencyFilter.max)
+          : undefined;
+      try {
+        if (replayConfirmMode === "filters") {
+          const body = {
+            eventKey: selectedEvent,
+            day,
+            filters: {
+              traceId,
+              messageKey,
+              accountNumber: accountNumber.trim() || null,
+              exceptionType: exceptionType.trim() || null,
+              retriable: retriable === "all" ? null : retriable === "true",
+              retryAttemptMin: null,
+              retryAttemptMax: null,
+              latencyMin,
+              latencyMax,
+              receivedLatencyMin,
+              receivedLatencyMax,
+              fromDate,
+              toDate,
+              fromTime,
+              toTime,
+            },
+          };
+          const result = await postJson<{ requested: number; failed: number }>(
+            "/api/v1/replay-jobs",
+            body
+          );
+          setReplayNotice(
+            `Replay job completed for ${result.requested} events (failed ${result.failed}).`
+          );
+        } else {
+          const ids = selectedRowIds
+            .map((id) => Number(id))
+            .filter((value) => Number.isFinite(value));
+          const body = {
+            mode: ids.length === 1 ? "ID" : "IDS",
+            eventKey: selectedEvent,
+            day,
+            id: ids.length === 1 ? ids[0] : null,
+            ids: ids.length > 1 ? ids : null,
+          };
+          const result = await postJson<{ requested: number; failed: number }>(
+            "/api/v1/replay",
+            body
+          );
+          setReplayNotice(
+            `Replay finished for ${result.requested} events (failed ${result.failed}).`
+          );
+        }
+        handleRefresh();
+        exitSelectionMode();
+      } catch (error) {
+        setReplayError(error instanceof Error ? error.message : String(error));
+      } finally {
+        setReplayWorking(false);
+        setReplayConfirmOpen(false);
+        setReplayConfirmMode(null);
+      }
+    };
+
+    const closeReplayConfirm = () => {
+      if (replayWorking) {
+        return;
+      }
+      setReplayConfirmOpen(false);
+      setReplayConfirmMode(null);
+    };
+
     const clearFilters = () => {
-      setSearchField("trace");
+      setSearchField("none");
       setSearchValue("");
       setSearchTerm("");
       setAccountNumber("");
@@ -562,10 +790,11 @@ export function EventDetailsScreen({
       setReceivedLatencyFilterInput({ mode: "gt", min: "", max: "" });
       setLatencyFilter({ mode: "gt", min: "", max: "" });
       setReceivedLatencyFilter({ mode: "gt", min: "", max: "" });
-      setFromDateTime("");
-      setToDateTime("");
-      setFromDateTimeInput("");
-    setToDateTimeInput("");
+      const defaults = buildDefaultRange(day);
+      setFromDateTime(defaults.from);
+      setToDateTime(defaults.to);
+      setFromDateTimeInput(defaults.from);
+    setToDateTimeInput(defaults.to);
     setSuccessPage(0);
     setFailurePage(0);
   };
@@ -601,6 +830,37 @@ export function EventDetailsScreen({
         console.error("Failed to load row details", error);
       });
   };
+
+  useEffect(() => {
+    if (!selectionMode) {
+      return;
+    }
+    setSelectedRowIds([]);
+    if (selectionScope !== "allFailed") {
+      setSelectionScope(null);
+    }
+  }, [
+    tab,
+    successPage,
+    failurePage,
+    searchTerm,
+    accountNumber,
+    exceptionType,
+    retriable,
+    fromDateTime,
+    toDateTime,
+    latencyFilter,
+    receivedLatencyFilter,
+    selectedEvent,
+    day,
+    selectionMode,
+  ]);
+
+  useEffect(() => {
+    if (tab !== "failures" && selectionMode) {
+      exitSelectionMode();
+    }
+  }, [exitSelectionMode, selectionMode, tab]);
 
   useEffect(() => {
     if (!drawerOpen || typeof document === "undefined") {
@@ -797,19 +1057,93 @@ export function EventDetailsScreen({
 
       <div className="grid-2 detail-layout">
         <div className="panel">
-          <div className="tabs">
-            <button className={tab === "success" ? "tab active" : "tab"} onClick={() => setTab("success")}>
-              Success{" "}
-              <span className="tab-count">
-                {typeof successTabCount === "number" ? formatNumber(successTabCount) : "--"}
-              </span>
-            </button>
-            <button className={tab === "failures" ? "tab active" : "tab"} onClick={() => setTab("failures")}>
-              Failures{" "}
-              <span className="tab-count danger">
-                {typeof failureTabCount === "number" ? formatNumber(failureTabCount) : "--"}
-              </span>
-            </button>
+          <div className="tabs-row">
+            <div className="tabs">
+              <button className={tab === "success" ? "tab active" : "tab"} onClick={() => setTab("success")}>
+                Success{" "}
+                <span className="tab-count">
+                  {typeof successTabCount === "number" ? formatNumber(successTabCount) : "--"}
+                </span>
+              </button>
+              <button className={tab === "failures" ? "tab active" : "tab"} onClick={() => setTab("failures")}>
+                Failures{" "}
+                <span className="tab-count danger">
+                  {typeof failureTabCount === "number" ? formatNumber(failureTabCount) : "--"}
+                </span>
+              </button>
+            </div>
+            {tab === "failures" ? (
+              <div className="tab-actions">
+                {selectionMode ? (
+                  <>
+                    <div className="tab-status">
+                      <span className="selection-note">
+                        {selectionScope === "allFailed"
+                          ? "All failed (current filters)"
+                          : `Selected ${selectedRowIds.length}`}
+                      </span>
+                      {selectionNote ? (
+                        <span className="selection-note secondary">{selectionNote}</span>
+                      ) : null}
+                    </div>
+                    <div className="tab-buttons">
+                      <button
+                        className={`button ghost small${
+                          selectionScope === "page" ? " is-active" : ""
+                        }`}
+                        onClick={startSelectionPage}
+                        type="button"
+                        aria-pressed={selectionScope === "page"}
+                      >
+                        Select page
+                      </button>
+                      <button
+                        className={`button ghost small${
+                          selectionScope === "allFailed" ? " is-active" : ""
+                        }`}
+                        onClick={startSelectionAllFailed}
+                        type="button"
+                        aria-pressed={selectionScope === "allFailed"}
+                      >
+                        Select all failed
+                      </button>
+                      <button
+                        className="button primary small"
+                        onClick={handleReplayAction}
+                        type="button"
+                        disabled={
+                          selectionScope === "allFailed"
+                            ? false
+                            : !selectedRowIds.length || selectedRowIds.length > maxReplaySelection
+                        }
+                      >
+                        Replay
+                      </button>
+                      <button
+                        className="button ghost small"
+                        onClick={clearSelection}
+                        type="button"
+                        disabled={selectionScope !== "allFailed" && selectedRowIds.length === 0}
+                      >
+                        Clear
+                      </button>
+                      <button className="button ghost small" onClick={exitSelectionMode} type="button">
+                        Cancel
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <button
+                    className="button ghost small replay-toggle"
+                    onClick={startSelectionMode}
+                    type="button"
+                  >
+                    <span className="material-symbols-outlined">replay</span>
+                    Replay
+                  </button>
+                )}
+              </div>
+            ) : null}
           </div>
 
           <div className="filter-panel">
@@ -823,6 +1157,7 @@ export function EventDetailsScreen({
                       value={searchField}
                       onChange={(event) => {
                         const value = event.target.value as
+                          | "none"
                           | "trace"
                           | "account"
                           | "exception"
@@ -830,7 +1165,10 @@ export function EventDetailsScreen({
                           | "latency"
                           | "latencyReceived";
                         setSearchField(value);
-                        if (value === "account") {
+                        if (value === "none") {
+                          setSearchValue("");
+                          setRetriableInput("all");
+                        } else if (value === "account") {
                           setSearchValue(accountNumber);
                         } else if (value === "exception") {
                           setSearchValue(exceptionType);
@@ -846,6 +1184,7 @@ export function EventDetailsScreen({
                         }
                       }}
                     >
+                      <option value="none">Select filter</option>
                       <option value="trace">Correlation ID</option>
                       <option value="account">Account Number</option>
                       <option value="latency">Latency</option>
@@ -857,7 +1196,12 @@ export function EventDetailsScreen({
                 </div>
                 <div className="field">
                   <label>Value</label>
-                  {searchField === "retriable" ? (
+                  {searchField === "none" ? (
+                    <div className="search">
+                      <span className="material-symbols-outlined">search</span>
+                      <input placeholder={searchValuePlaceholder} value="" disabled />
+                    </div>
+                  ) : searchField === "retriable" ? (
                     <div className="select">
                       <span className="material-symbols-outlined">fact_check</span>
                       <select
@@ -1034,7 +1378,8 @@ export function EventDetailsScreen({
 
           {rowsError && <div className="banner error">Failed to load rows: {rowsError}</div>}
           {rowsLoading && <div className="banner info">Loading rows...</div>}
-
+          {replayError && <div className="banner error">Replay failed: {replayError}</div>}
+          {replayNotice && <div className="banner info">{replayNotice}</div>}
           <div className="table-wrap">
             {tab === "success" ? (
               <table className="table-wide">
@@ -1048,13 +1393,12 @@ export function EventDetailsScreen({
                     <th>Target Topic</th>
                     <th>Latency</th>
                     <th>Message Key</th>
-                    <th className="right">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {rows.length === 0 ? (
                     <tr>
-                      <td colSpan={9} className="empty-cell">
+                      <td colSpan={8} className="empty-cell">
                         No success rows match the current filters.
                       </td>
                     </tr>
@@ -1075,18 +1419,6 @@ export function EventDetailsScreen({
                           <td className="mono muted">{toDisplayValue(row.target_topic)}</td>
                           <td className="mono muted">{formatLatency(latencyMs ?? undefined)}</td>
                           <td className="mono">{toDisplayValue(row.message_key)}</td>
-                          <td className="right">
-                            <button
-                              className="icon-button subtle"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                openRow(row);
-                              }}
-                              aria-label="Open details"
-                            >
-                              <span className="material-symbols-outlined">chevron_right</span>
-                            </button>
-                          </td>
                         </tr>
                       );
                     })
@@ -1106,13 +1438,13 @@ export function EventDetailsScreen({
                     <th>Retry</th>
                     <th>Latency</th>
                     <th>Message Key</th>
-                    <th className="right">Actions</th>
+                    {selectionMode ? <th className="right">Replay</th> : null}
                   </tr>
                 </thead>
                 <tbody>
                   {rows.length === 0 ? (
                     <tr>
-                      <td colSpan={10} className="empty-cell">
+                      <td colSpan={selectionMode ? 10 : 9} className="empty-cell">
                         No failure rows match the current filters.
                       </td>
                     </tr>
@@ -1140,18 +1472,29 @@ export function EventDetailsScreen({
                           <td className="mono muted">{toDisplayValue(row.retry_attempt)}</td>
                           <td className="mono muted">{formatLatency(latencyMs ?? undefined)}</td>
                           <td className="mono">{toDisplayValue(row.message_key)}</td>
-                          <td className="right">
-                            <button
-                              className="icon-button subtle"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                openRow(row);
-                              }}
-                              aria-label="Open details"
-                            >
-                              <span className="material-symbols-outlined">chevron_right</span>
-                            </button>
-                          </td>
+                          {selectionMode ? (
+                            <td className="right" onClick={(event) => event.stopPropagation()}>
+                              <input
+                                type="checkbox"
+                                className="table-checkbox"
+                                checked={
+                                  row.id === undefined || row.id === null
+                                    ? false
+                                    : selectionScope === "allFailed"
+                                    ? true
+                                    : selectedRowIdSet.has(String(row.id))
+                                }
+                                disabled={row.id === undefined || row.id === null || selectionScope === "allFailed"}
+                                onChange={() =>
+                                  toggleRowSelection(
+                                    row.id === undefined || row.id === null ? null : String(row.id)
+                                  )
+                                }
+                                onClick={(event) => event.stopPropagation()}
+                                aria-label="Select row for replay"
+                              />
+                            </td>
+                          ) : null}
                         </tr>
                       );
                     })
@@ -1206,6 +1549,125 @@ export function EventDetailsScreen({
             </div>
           </div>
         </div>
+
+        {replayConfirmOpen && (
+          <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="replay-confirm-title">
+            <div className="modal-backdrop" onClick={closeReplayConfirm} />
+            <div className="modal-card" onClick={(event) => event.stopPropagation()}>
+              <div className="modal-header">
+                <div>
+                  <h3 id="replay-confirm-title">{replayConfirmTitle}</h3>
+                  <div className="modal-meta">
+                    <span className="mono">{selectedEvent}</span>
+                    <span className="tag neutral">
+                      {replayConfirmMode === "ids" ? `Selected ${selectedRowIds.length}` : day}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  className="icon-button"
+                  onClick={closeReplayConfirm}
+                  aria-label="Close dialog"
+                >
+                  <span className="material-symbols-outlined">close</span>
+                </button>
+              </div>
+              <div className="modal-body">
+                <p className="modal-lede">
+                  This will re-emit events to the downstream system. Please confirm the scope.
+                </p>
+                {replayConfirmMode === "ids" ? (
+                  <div className="replay-table-wrap">
+                    <div className="replay-table-title">
+                      Selected events ({selectedRowIds.length})
+                    </div>
+                    <table className="replay-table">
+                      <thead>
+                        <tr>
+                          <th>ID</th>
+                          <th>Trace ID</th>
+                          <th>Exception</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedRowsForReplay.length > 0
+                          ? selectedRowsForReplay.map((row, index) => (
+                              <tr key={row?.id ?? `replay-row-${index}`}>
+                                <td className="mono">{toDisplayValue(row?.id)}</td>
+                                <td className="mono">{toDisplayValue(row?.event_trace_id)}</td>
+                                <td className="mono">{toDisplayValue(row?.exception_type)}</td>
+                              </tr>
+                            ))
+                          : selectedRowIds.map((id) => (
+                              <tr key={id}>
+                                <td className="mono">{id}</td>
+                                <td className="mono">--</td>
+                                <td className="mono">--</td>
+                              </tr>
+                            ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="meta-grid">
+                    <div className="meta-card">
+                      <span>Scope</span>
+                      <strong>{replayScopeLabel}</strong>
+                    </div>
+                    <div className="meta-card">
+                      <span>From</span>
+                      <strong className="mono">{formatDateTime(fromDateTime)}</strong>
+                    </div>
+                    <div className="meta-card">
+                      <span>To</span>
+                      <strong className="mono">{formatDateTime(toDateTime)}</strong>
+                    </div>
+                    {replayConfirmMode === "filters" && (
+                      <>
+                        {replayTraceId ? (
+                          <div className="meta-card">
+                            <span>Trace ID</span>
+                            <strong className="mono">{replayTraceId}</strong>
+                          </div>
+                        ) : null}
+                        {accountNumber.trim() ? (
+                          <div className="meta-card">
+                            <span>Account</span>
+                            <strong className="mono">{accountNumber}</strong>
+                          </div>
+                        ) : null}
+                        {exceptionType.trim() ? (
+                          <div className="meta-card">
+                            <span>Exception</span>
+                            <strong className="mono">{exceptionType}</strong>
+                          </div>
+                        ) : null}
+                        {retriable !== "all" ? (
+                          <div className="meta-card">
+                            <span>Retriable</span>
+                            <strong>{retriable === "true" ? "Yes" : "No"}</strong>
+                          </div>
+                        ) : null}
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+              <div className="modal-actions">
+                <button
+                  className="button ghost"
+                  onClick={closeReplayConfirm}
+                  disabled={replayWorking}
+                >
+                  Cancel
+                </button>
+                <button className="button primary" onClick={confirmReplay} disabled={replayWorking}>
+                  {replayWorking ? "Replaying..." : "Confirm Replay"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {drawerOpen && selectedRow && (
           <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="transaction-details-title">

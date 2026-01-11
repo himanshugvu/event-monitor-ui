@@ -8,6 +8,20 @@ select {
   font-weight: 600;
 }
 
+select,
+select option,
+select optgroup {
+  background-color: var(--surface);
+  color: var(--text);
+}
+
+select option:checked,
+select option:focus,
+select option:hover {
+  background-color: var(--accent);
+  color: #ffffff;
+}
+
 input::placeholder {
   color: var(--text-sub);
 }
@@ -599,6 +613,12 @@ input::placeholder {
 
 .button.ghost {
   background: transparent;
+}
+
+.button.is-active {
+  background: var(--surface-2);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .button.full {
@@ -2109,6 +2129,48 @@ input::placeholder {
   box-shadow: none;
 }
 
+.selection-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.selection-note {
+  color: var(--text-sub);
+  font-weight: 600;
+}
+
+.selection-note.secondary {
+  opacity: 0.7;
+}
+
+.tab-status {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.tab-buttons {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.table-checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.table-checkbox:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .table-card .table-wrap {
   border: none;
   border-top: var(--border-width) solid var(--border);
@@ -2366,8 +2428,39 @@ tbody tr.clickable {
 .tabs {
   display: flex;
   gap: 1.2rem;
+  border-bottom: none;
+  margin-bottom: 0;
+}
+
+.tabs-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
   border-bottom: var(--border-width) solid var(--border);
   margin-bottom: 1rem;
+}
+
+.tab-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.replay-toggle {
+  border-radius: 999px;
+  padding: 0.4rem 0.9rem;
+  background: var(--surface-2);
+  border-color: var(--border);
+  box-shadow: none;
+  font-size: 0.7rem;
+}
+
+.replay-toggle .material-symbols-outlined {
+  font-size: 1rem;
+  color: var(--accent);
 }
 
 .tab {
@@ -2606,6 +2699,13 @@ tbody tr.clickable {
   font-weight: 700;
 }
 
+.modal-lede {
+  margin: 0 0 1rem;
+  font-size: 0.85rem;
+  color: var(--text-sub);
+  font-weight: 500;
+}
+
 .modal-meta {
   display: flex;
   gap: 0.6rem;
@@ -2620,6 +2720,48 @@ tbody tr.clickable {
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
+}
+
+.replay-table-wrap {
+  border: var(--border-width) solid var(--border);
+  border-radius: 16px;
+  padding: 0.8rem 0.9rem 1rem;
+  background: var(--surface-2);
+  display: grid;
+  gap: 0.6rem;
+}
+
+.replay-table-title {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-sub);
+  font-weight: 700;
+}
+
+.replay-table {
+  width: 100%;
+  min-width: 0;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: var(--surface);
+  border: var(--border-width) solid var(--border-soft);
+  border-radius: 12px;
+  font-size: 0.78rem;
+  overflow: hidden;
+}
+
+.replay-table th,
+.replay-table td {
+  padding: 0.55rem 0.7rem;
+}
+
+.replay-table thead {
+  background: var(--surface-2);
+}
+
+.replay-table tbody tr:hover {
+  background: transparent;
 }
 
 .modal-actions {
