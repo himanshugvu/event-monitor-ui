@@ -7,14 +7,13 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Node
 node_modules
 dist
 dist-ssr
 *.local
 .vite
 coverage
-ui.out.log
-ui.err.log
 
 # Env files
 .env
@@ -32,9 +31,7 @@ public/fonts/fonts.css
 .vscode/*
 !.vscode/extensions.json
 .idea
+*.iml
+
+# OS
 .DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?

@@ -14,6 +14,9 @@ export async function fetchJson<T>(path: string, signal?: AbortSignal): Promise<
     }
     throw new Error(message);
   }
+  if (response.status === 204) {
+    return undefined as T;
+  }
   return response.json() as Promise<T>;
 }
 

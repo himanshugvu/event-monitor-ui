@@ -1,5 +1,5 @@
 export type ThemeMode = "light" | "dark";
-export type ScreenMode = "home" | "event";
+export type ScreenMode = "event" | "home" | "replay" | "jobs";
 export type StatusTone = "healthy" | "warning" | "critical";
 export type DayMode = "today" | "yesterday" | "custom";
 export type LatencyMetric = "p95" | "p99" | "max";

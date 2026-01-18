@@ -57,6 +57,7 @@ const formatLocalDateTime = (date: Date) =>
   `${toLocalDayString(date)}T${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(
     date.getSeconds()
   )}`;
+const round2 = (value: number) => Math.round(value * 100) / 100;
 
 export function EventDetailsScreen({
   day,
@@ -148,6 +149,37 @@ export function EventDetailsScreen({
   const [replayConfirmOpen, setReplayConfirmOpen] = useState(false);
   const [replayConfirmMode, setReplayConfirmMode] = useState<"ids" | "filters" | null>(null);
   const [replayWorking, setReplayWorking] = useState(false);
+  const applyReplayDelta = useCallback(
+    (succeeded: number) => {
+      if (!Number.isFinite(succeeded) || succeeded <= 0) {
+        return;
+      }
+      setSummary((current) => {
+        if (!current) {
+          return current;
+        }
+        const nextSuccess = current.kpis.success + succeeded;
+        const nextFailure = Math.max(0, current.kpis.failure - succeeded);
+        const total = current.kpis.total;
+        return {
+          ...current,
+          kpis: {
+            ...current.kpis,
+            success: nextSuccess,
+            failure: nextFailure,
+            successRate: total > 0 ? round2((nextSuccess / total) * 100) : 0,
+          },
+        };
+      });
+      if (successTotalLoaded) {
+        setSuccessTotal((value) => value + succeeded);
+      }
+      if (failureTotalLoaded) {
+        setFailureTotal((value) => Math.max(0, value - succeeded));
+      }
+    },
+    [failureTotalLoaded, successTotalLoaded]
+  );
   const pageSize = 50;
   const maxReplaySelection = 50;
   const eventCatalogMap = useMemo(
@@ -423,6 +455,7 @@ export function EventDetailsScreen({
         toDate,
         fromTime,
         toTime,
+        nonce: refreshIndex > 0 ? refreshIndex : undefined,
       });
     fetchJson<PagedRowsResponse<SuccessRow>>(
       `/api/v1/days/${day}/events/${selectedEvent}/success${query}`,
@@ -496,6 +529,7 @@ export function EventDetailsScreen({
         toDate,
         fromTime,
         toTime,
+        nonce: refreshIndex > 0 ? refreshIndex : undefined,
       });
     fetchJson<PagedRowsResponse<FailureRow>>(
       `/api/v1/days/${day}/events/${selectedEvent}/failures${query}`,
@@ -580,8 +614,6 @@ export function EventDetailsScreen({
     [rows]
   );
   const selectedRowIdSet = useMemo(() => new Set(selectedRowIds), [selectedRowIds]);
-  const allPageSelected =
-    pageSelectableIds.length > 0 && pageSelectableIds.every((id) => selectedRowIdSet.has(id));
   const selectionNote = selectedRowIds.length >= maxReplaySelection ? "Max 50 selected" : "";
   const { traceId: replayTraceId } = resolveSearch(searchTerm);
   const selectedRowsForReplay = useMemo(() => {
@@ -595,6 +627,8 @@ export function EventDetailsScreen({
     );
     return selectedRowIds.map((id) => map.get(id)).filter(Boolean);
   }, [rows, selectedRowIds]);
+  const getReplayException = (row?: SuccessRow | FailureRow | null) =>
+    row && "exception_type" in row ? row.exception_type : undefined;
 
     const applyFilters = () => {
       const trimmedSearch = searchValue.trim();
@@ -643,15 +677,6 @@ export function EventDetailsScreen({
         return [...current, rowId];
       });
     };
-
-  const handleReplaySelected = () => {
-    if (!selectedRowIds.length || selectedRowIds.length > maxReplaySelection) {
-      return;
-    }
-    console.info("Replay selected events", selectedRowIds);
-    setSelectedRowIds([]);
-    setSelectionScope(null);
-  };
 
   const startSelectionMode = () => {
     setSelectionMode(true);
@@ -733,13 +758,18 @@ export function EventDetailsScreen({
               toTime,
             },
           };
-          const result = await postJson<{ requested: number; failed: number }>(
+          const result = await postJson<{ requested: number; failed: number; succeeded?: number }>(
             "/api/v1/replay-jobs",
             body
           );
           setReplayNotice(
             `Replay job completed for ${result.requested} events (failed ${result.failed}).`
           );
+          const succeeded =
+            Number.isFinite(result.succeeded) && result.succeeded !== undefined
+              ? result.succeeded
+              : Math.max(0, result.requested - result.failed);
+          applyReplayDelta(succeeded);
         } else {
           const ids = selectedRowIds
             .map((id) => Number(id))
@@ -751,13 +781,18 @@ export function EventDetailsScreen({
             id: ids.length === 1 ? ids[0] : null,
             ids: ids.length > 1 ? ids : null,
           };
-          const result = await postJson<{ requested: number; failed: number }>(
+          const result = await postJson<{ requested: number; failed: number; succeeded?: number }>(
             "/api/v1/replay",
             body
           );
           setReplayNotice(
             `Replay finished for ${result.requested} events (failed ${result.failed}).`
           );
+          const succeeded =
+            Number.isFinite(result.succeeded) && result.succeeded !== undefined
+              ? result.succeeded
+              : Math.max(0, result.requested - result.failed);
+          applyReplayDelta(succeeded);
         }
         handleRefresh();
         exitSelectionMode();
@@ -1595,7 +1630,9 @@ export function EventDetailsScreen({
                               <tr key={row?.id ?? `replay-row-${index}`}>
                                 <td className="mono">{toDisplayValue(row?.id)}</td>
                                 <td className="mono">{toDisplayValue(row?.event_trace_id)}</td>
-                                <td className="mono">{toDisplayValue(row?.exception_type)}</td>
+                                <td className="mono">
+                                  {toDisplayValue(getReplayException(row))}
+                                </td>
                               </tr>
                             ))
                           : selectedRowIds.map((id) => (

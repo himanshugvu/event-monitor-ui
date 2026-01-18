@@ -4,6 +4,8 @@ import { DateField } from "./components/DateField";
 import { RefreshMenu } from "./components/RefreshMenu";
 import { EventDetailsScreen } from "./screens/EventDetailsScreen";
 import { HomeScreen } from "./screens/HomeScreen";
+import { JobAuditScreen } from "./screens/JobAuditScreen";
+import { ReplayAuditScreen } from "./screens/ReplayAuditScreen";
 import type { DayMode, EventCatalogItem, LatencyMetric, ScreenMode, ThemeMode } from "./types";
 import { toLocalDayString } from "./utils/date";
 import { isAbortError } from "./utils/errors";
@@ -12,9 +14,10 @@ import { resolveCatalogEntry } from "./utils/search";
 import { getInitialTheme, THEME_STORAGE_KEY } from "./utils/theme";
 
 const navItems = [
-  { id: "home", label: "Global Aggregation", icon: "dashboard", screen: "home" as ScreenMode },
+  { id: "home", label: "Dashboard", icon: "dashboard", screen: "home" as ScreenMode },
   { id: "event", label: "Events Log", icon: "list", screen: "event" as ScreenMode },
-  { id: "failures", label: "Failure Analysis", icon: "bug_report", screen: "event" as ScreenMode },
+  { id: "replay", label: "Replay Audit", icon: "history", screen: "replay" as ScreenMode },
+  { id: "jobs", label: "Job Audit", icon: "fact_check", screen: "jobs" as ScreenMode },
 ];
 
 export default function App() {
@@ -32,8 +35,22 @@ export default function App() {
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<string>("");
   const activeMeta = resolveCatalogEntry(selectedEvent, eventCatalog);
-  const headerTitle = screen === "home" ? "Global Event Aggregation" : activeMeta.name;
-  const headerSub = screen === "home" ? "" : "Events Log";
+  const headerTitle =
+    screen === "event"
+      ? activeMeta.name
+      : screen === "replay"
+      ? "Replay Audit"
+      : screen === "jobs"
+      ? "Job Audit"
+      : "Dashboard";
+  const headerSub =
+    screen === "event"
+      ? "Events Log"
+      : screen === "replay"
+      ? "Replay Audit Trail"
+      : screen === "jobs"
+      ? "Housekeeping Tracker"
+      : "Global Aggregation";
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -128,7 +145,14 @@ export default function App() {
       </div>
     ) : null;
 
-  const headerControlsNode = screen === "event" ? eventHeaderControls : homeHeaderControls;
+  useEffect(() => {
+    if (screen !== "event") {
+      setEventHeaderControls(null);
+    }
+  }, [screen]);
+
+  const headerControlsNode =
+    screen === "event" ? eventHeaderControls : screen === "home" ? homeHeaderControls : null;
 
   return (
     <div className="layout auto-sidebar">
@@ -234,7 +258,7 @@ export default function App() {
                 setActiveNav("event");
               }}
             />
-          ) : (
+          ) : screen === "event" ? (
             <EventDetailsScreen
               day={day}
               dayMode={dayMode}
@@ -247,6 +271,10 @@ export default function App() {
               onLatencyMetricToggle={cycleLatencyMetric}
               onHeaderControls={setEventHeaderControls}
             />
+          ) : screen === "jobs" ? (
+            <JobAuditScreen eventCatalog={eventCatalog} />
+          ) : (
+            <ReplayAuditScreen />
           )}
         </div>
       </main>
