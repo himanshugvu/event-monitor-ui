@@ -186,15 +186,6 @@ export default function App() {
             );
           })}
         </nav>
-        <div className="sidebar-footer">
-          <div className="avatar-circle">
-            <span className="material-symbols-outlined">person</span>
-          </div>
-          <div className="sidebar-meta">
-            <div className="sidebar-user">Admin User</div>
-            <div className="sidebar-email">admin@eventflow.com</div>
-          </div>
-        </div>
       </aside>
       <main className="main">
         <header className={screen === "event" ? "top-header event-header" : "top-header"}>

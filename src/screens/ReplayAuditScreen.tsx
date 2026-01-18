@@ -252,7 +252,7 @@ export function ReplayAuditScreen() {
               <div className="search">
                 <span className="material-symbols-outlined">search</span>
                 <input
-                  placeholder="Replay ID, record ID, trace ID"
+                  placeholder="Replay ID"
                   type="text"
                   value={filters.search}
                   onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))}
