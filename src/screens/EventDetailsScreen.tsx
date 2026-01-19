@@ -1420,26 +1420,40 @@ export function EventDetailsScreen({
               <table className="table-wide">
                 <thead>
                   <tr>
-                    <th>Event time</th>
-                    <th>Trace ID</th>
-                    <th>Account</th>
-                    <th>Customer Type</th>
-                    <th>Source Topic</th>
-                    <th>Target Topic</th>
-                    <th>Latency</th>
-                    <th>Message Key</th>
+                    <th rowSpan={2}>Event time</th>
+                    <th rowSpan={2}>Trace ID</th>
+                    <th rowSpan={2}>Account</th>
+                    <th rowSpan={2}>Customer Type</th>
+                    <th colSpan={2} className="table-group">
+                      Partition
+                    </th>
+                    <th colSpan={2} className="table-group">
+                      Offset
+                    </th>
+                    <th colSpan={2} className="table-group">
+                      Latency
+                    </th>
+                  </tr>
+                  <tr className="table-subhead">
+                    <th className="table-group">Source</th>
+                    <th className="table-group">Target</th>
+                    <th className="table-group">Source</th>
+                    <th className="table-group">Target</th>
+                    <th className="table-group">Recv</th>
+                    <th className="table-group">Total</th>
                   </tr>
                 </thead>
                 <tbody>
                   {rows.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="empty-cell">
+                      <td colSpan={10} className="empty-cell">
                         No success rows match the current filters.
                       </td>
                     </tr>
                   ) : (
                     successRows.map((row, index) => {
                       const latencyMs = calculateLatencyMs(row);
+                      const receivedLatencyMs = row.latency_event_received_ms ?? undefined;
                       return (
                         <tr
                           key={row.id ?? row.event_trace_id ?? `success-${index}`}
@@ -1450,10 +1464,12 @@ export function EventDetailsScreen({
                           <td className="mono">{toDisplayValue(row.event_trace_id)}</td>
                           <td className="mono">{toDisplayValue(row.account_number)}</td>
                           <td>{toDisplayValue(row.customer_type)}</td>
-                          <td className="mono muted">{toDisplayValue(row.source_topic)}</td>
-                          <td className="mono muted">{toDisplayValue(row.target_topic)}</td>
+                          <td className="mono muted">{toDisplayValue(row.source_partition_id)}</td>
+                          <td className="mono muted">{toDisplayValue(row.target_partition_id)}</td>
+                          <td className="mono muted">{toDisplayValue(row.source_offset)}</td>
+                          <td className="mono muted">{toDisplayValue(row.target_offset)}</td>
+                          <td className="mono muted">{formatLatency(receivedLatencyMs)}</td>
                           <td className="mono muted">{formatLatency(latencyMs ?? undefined)}</td>
-                          <td className="mono">{toDisplayValue(row.message_key)}</td>
                         </tr>
                       );
                     })
@@ -1467,12 +1483,12 @@ export function EventDetailsScreen({
                     <th>Event time</th>
                     <th>Trace ID</th>
                     <th>Account</th>
-                    <th>Exception</th>
-                    <th>Message</th>
+                    <th>Partition</th>
+                    <th>Offset</th>
                     <th>Retriable</th>
-                    <th>Retry</th>
+                    <th>Exception</th>
+                    <th>Recv Latency</th>
                     <th>Latency</th>
-                    <th>Message Key</th>
                     {selectionMode ? <th className="right">Replay</th> : null}
                   </tr>
                 </thead>
@@ -1487,6 +1503,7 @@ export function EventDetailsScreen({
                     failureRows.map((row, index) => {
                       const retriableLabel = row.retriable ? "Yes" : "No";
                       const latencyMs = calculateLatencyMs(row);
+                      const receivedLatencyMs = row.latency_event_received_ms ?? undefined;
                       return (
                         <tr
                           key={row.id ?? row.event_trace_id ?? `failure-${index}`}
@@ -1496,17 +1513,14 @@ export function EventDetailsScreen({
                           <td className="mono">{formatDateTime(row.event_datetime)}</td>
                           <td className="mono">{toDisplayValue(row.event_trace_id)}</td>
                           <td className="mono">{toDisplayValue(row.account_number)}</td>
-                          <td className="mono">{toDisplayValue(row.exception_type)}</td>
-                          <td title={row.exception_message ?? ""}>
-                            {row.exception_message ? row.exception_message.slice(0, 80) : "--"}
-                            {row.exception_message && row.exception_message.length > 80 ? "..." : ""}
-                          </td>
+                          <td className="mono muted">{toDisplayValue(row.source_partition_id)}</td>
+                          <td className="mono muted">{toDisplayValue(row.source_offset)}</td>
                           <td>
                             <span className={row.retriable ? "tag warning" : "tag neutral"}>{retriableLabel}</span>
                           </td>
-                          <td className="mono muted">{toDisplayValue(row.retry_attempt)}</td>
+                          <td className="mono">{toDisplayValue(row.exception_type)}</td>
+                          <td className="mono muted">{formatLatency(receivedLatencyMs)}</td>
                           <td className="mono muted">{formatLatency(latencyMs ?? undefined)}</td>
-                          <td className="mono">{toDisplayValue(row.message_key)}</td>
                           {selectionMode ? (
                             <td className="right" onClick={(event) => event.stopPropagation()}>
                               <input

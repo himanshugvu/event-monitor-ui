@@ -3067,6 +3067,46 @@ tbody tr.clickable {
   color: var(--text-sub);
 }
 
+.table-subhead th {
+  font-size: 0.6rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-sub);
+  font-weight: 700;
+}
+
+.table-group {
+  text-align: center;
+}
+
+.cell-split {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.cell-split.horizontal {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.cell-split-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.2rem;
+}
+
+.cell-split-label {
+  display: inline-block;
+  min-width: 2rem;
+  margin-right: 0.35rem;
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-sub);
+}
+
 @media (max-width: 1100px) {
   .grid-2 {
     grid-template-columns: 1fr;
