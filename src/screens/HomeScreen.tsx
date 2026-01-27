@@ -166,7 +166,7 @@ export function HomeScreen({
         ...event,
         name,
         category,
-        status: getStatusTone(event.successRate),
+        status: getStatusTone(event.successRate, event.total),
       };
     });
   }, [home]);

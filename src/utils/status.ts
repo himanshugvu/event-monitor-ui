@@ -6,7 +6,10 @@ export const statusLabels: Record<StatusTone, string> = {
   critical: "Critical",
 };
 
-export const getStatusTone = (successRate?: number): StatusTone => {
+export const getStatusTone = (successRate?: number, total?: number): StatusTone => {
+  if (total === 0) {
+    return "warning";
+  }
   if (successRate === null || successRate === undefined || Number.isNaN(successRate)) {
     return "warning";
   }
