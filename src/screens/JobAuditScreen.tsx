@@ -65,6 +65,7 @@ type HousekeepingPreviewEvent = {
   deletedSuccess: number;
   deletedFailure: number;
   deletedTotal: number;
+  nextRunAt?: string | null;
 };
 
 type HousekeepingPreview = {
@@ -74,6 +75,7 @@ type HousekeepingPreview = {
   deletedSuccess: number;
   deletedFailure: number;
   deletedTotal: number;
+  nextRunAt?: string | null;
   events: HousekeepingPreviewEvent[];
 };
 
@@ -128,6 +130,25 @@ export function JobAuditScreen({ eventCatalog }: JobAuditScreenProps) {
   const [historyPage, setHistoryPage] = useState(0);
   const [historyHasNext, setHistoryHasNext] = useState(false);
   const historyPageSize = 12;
+
+  const pickNextRunAt = useCallback((candidates: Array<string | null | undefined>) => {
+    let next: Date | null = null;
+    let nextRaw: string | null = null;
+    for (const value of candidates) {
+      if (!value) {
+        continue;
+      }
+      const parsed = new Date(value);
+      if (Number.isNaN(parsed.getTime())) {
+        continue;
+      }
+      if (!next || parsed < next) {
+        next = parsed;
+        nextRaw = value;
+      }
+    }
+    return nextRaw;
+  }, []);
 
   const loadDaily = useCallback((signal?: AbortSignal) => {
     setError(null);
@@ -233,6 +254,11 @@ export function JobAuditScreen({ eventCatalog }: JobAuditScreenProps) {
             deletedSuccess,
             deletedFailure,
             deletedTotal,
+            nextRunAt: pickNextRunAt([
+              retention?.nextRunAt,
+              replay?.nextRunAt,
+              housekeeping?.nextRunAt,
+            ]),
             events: combinedEvents,
           });
         })
@@ -665,18 +691,19 @@ export function JobAuditScreen({ eventCatalog }: JobAuditScreenProps) {
                 <th>Ready (Total)</th>
                 <th>Ready (Failures)</th>
                 <th>Ready (Success)</th>
+                <th>Next scheduled</th>
               </tr>
             </thead>
             <tbody>
               {previewLoading ? (
                 <tr>
-                  <td colSpan={4} className="empty-cell">
+                  <td colSpan={5} className="empty-cell">
                     Loading preview counts...
                   </td>
                 </tr>
               ) : previewEvents.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="empty-cell">
+                  <td colSpan={5} className="empty-cell">
                     No preview data available yet.
                   </td>
                 </tr>
@@ -690,6 +717,7 @@ export function JobAuditScreen({ eventCatalog }: JobAuditScreenProps) {
                     <td className="mono">{formatNumber(item.deletedTotal)}</td>
                     <td className="mono">{formatNumber(item.deletedFailure)}</td>
                     <td className="mono">{formatNumber(item.deletedSuccess)}</td>
+                    <td className="mono">{formatDateTime(item.nextRunAt)}</td>
                   </tr>
                 ))
               )}
